@@ -18,6 +18,10 @@ dependencies = [
     "structlog>=24.0.0",
     "typer>=0.12.0",
     "rich>=13.8.0",
+    "mss>=10.2.0",
+    "pillow>=11.0.0",
+    "pywinauto>=0.6.9; sys_platform == 'win32'",
+    "pywin32>=311; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
@@ -71,6 +75,25 @@ disallow_incomplete_defs = true
 check_untyped_defs = true
 no_implicit_optional = true
 warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = [
+    "win32gui",
+    "win32process",
+    "win32security",
+    "win32api",
+    "win32con",
+    "psutil",
+    "mss",
+    "mss.*",
+    "pywinauto",
+    "pywinauto.*",
+    "pyautogui",
+    "pyautogui.*",
+    "pynput",
+    "pynput.*",
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 minversion = "8.0"

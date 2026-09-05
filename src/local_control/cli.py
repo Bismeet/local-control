@@ -6,12 +6,16 @@ import sys
 from typing import Any
 
 import typer
+from PIL import Image
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
 from local_control import __version__
 from local_control.config.settings import Settings
+from local_control.observation.image import encode_png, is_black_frame
+from local_control.observation.observer import Observer
+from local_control.observation.screen import ScreenCapture, init_dpi_awareness
 
 app = typer.Typer(
     name="local-control",
@@ -38,8 +42,56 @@ def version() -> None:
 
 
 @app.command()
+def observe() -> None:
+    """Capture screen observation, list visible windows, and report screen geometry."""
+    init_dpi_awareness()
+    settings = Settings.load()
+    observer = Observer(settings=settings)
+
+    console.print("[bold blue]Capturing desktop observation...[/bold blue]")
+    try:
+        obs = observer.observe(step_index=0)
+    except Exception as e:
+        console.print(f"[bold red]Observation failed:[/bold red] {e}")
+        raise typer.Exit(code=1) from e
+
+    def _safe_str(s: str) -> str:
+        enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+        return s.encode(enc, errors="replace").decode(enc)
+
+    # Summary Panel
+    fg_title = _safe_str(obs.foreground.title) if obs.foreground else "None"
+    summary_text = (
+        f"Screen Geometry: [bold green]{obs.screen.width_px}x{obs.screen.height_px}[/bold green] "
+        f"(Scale: {obs.screen.scale_factor})\n"
+        f"Model Image: [bold green]{obs.image.model_width}x{obs.image.model_height}[/bold green] "
+        f"(dHash: [cyan]{obs.image.phash}[/cyan])\n"
+        f"Screen State: [bold green]{obs.screen_state}[/bold green]\n"
+        f"Cursor (model space): [yellow]({obs.cursor.x}, {obs.cursor.y})[/yellow]\n"
+        f"Foreground Window: {fg_title}"
+    )
+    console.print(Panel(summary_text, title="Desktop Observation Summary"))
+
+    # Windows Table
+    table = Table(title=f"Visible Windows (Top {len(obs.windows)})", show_header=True)
+    table.add_column("Handle", style="cyan", no_wrap=True)
+    table.add_column("Title", style="white", max_width=50)
+    table.add_column("Process (PID)", style="magenta")
+    table.add_column("BBox (x,y,w,h)", style="yellow")
+    table.add_column("Foreground?", style="green")
+
+    for w in obs.windows:
+        fg_marker = "[bold green]YES[/bold green]" if w.is_foreground else "no"
+        bbox_str = f"({w.bbox.x}, {w.bbox.y}, {w.bbox.width}, {w.bbox.height})"
+        proc_str = f"{_safe_str(w.process_name)} ({w.pid})"
+        table.add_row(str(w.handle), _safe_str(w.title), proc_str, bbox_str, fg_marker)
+
+    console.print(table)
+
+
+@app.command()
 def doctor() -> None:
-    """Inspect environment readiness, configuration, and safety boundaries."""
+    """Inspect environment readiness, configuration, and observation self-tests."""
     console.print(
         Panel.fit(
             f"[bold blue]local-control Doctor[/bold blue] (v{__version__})",
@@ -77,8 +129,58 @@ def doctor() -> None:
         console.print(f"Configuration: [red]Failed to load: {e}[/red]")
         raise typer.Exit(code=1) from e
 
-    # 3. Settings table with masked secrets
-    table = Table(title="Effective Settings (Secrets Masked)", show_header=True)
+    # 3. Phase 1 Screen Capture & Observation Self-Tests
+    console.print("\n[bold]Phase 1 Observation Self-Tests:[/bold]")
+    dpi_ok = init_dpi_awareness()
+    console.print(
+        f"  DPI Awareness Init: {'[green]OK[/green]' if dpi_ok else '[yellow]Fallback[/yellow]'}"
+    )
+
+    if os.name == "nt":
+        try:
+            capture = ScreenCapture()
+            frame = capture.capture(monitor_index=0)
+            cx = ctypes.windll.user32.GetSystemMetrics(0)
+            cy = ctypes.windll.user32.GetSystemMetrics(1)
+            metrics_match = frame.width == cx and frame.height == cy
+            status = (
+                "[green]MATCH[/green]"
+                if metrics_match
+                else f"[yellow]Differs ({frame.width}x{frame.height} vs {cx}x{cy})[/yellow]"
+            )
+            console.print(
+                f"  Capture Dimensions vs SystemMetrics: {frame.width}x{frame.height} -> {status}"
+            )
+
+            # Cursor bounds check
+            import win32gui
+
+            cur_x, cur_y = win32gui.GetCursorPos()
+            cur_in_bounds = (0 <= cur_x <= frame.width) and (0 <= cur_y <= frame.height)
+            cur_status = "[green]OK[/green]" if cur_in_bounds else "[red]OUT OF BOUNDS[/red]"
+            console.print(f"  Cursor Position ({cur_x}, {cur_y}) within display: {cur_status}")
+
+            # Image encoding self-test
+            img = Image.frombytes(
+                "RGB", (frame.width, frame.height), frame.raw_bytes, "raw", "BGRX"
+            )
+            png_bytes = encode_png(img)
+            console.print(f"  PNG Encoding: [green]OK ({len(png_bytes) // 1024} KB)[/green]")
+
+            # Black frame heuristic test
+            black_img = Image.new("RGB", (100, 100), color=(0, 0, 0))
+            heuristic_ok = is_black_frame(black_img) and not is_black_frame(img)
+            console.print(
+                f"  Black Frame Detection Heuristic: {'[green]PASS[/green]' if heuristic_ok else '[red]FAIL[/red]'}"
+            )
+
+        except Exception as e:
+            console.print(f"  Observation Self-Test: [red]FAILED ({e})[/red]")
+    else:
+        console.print("  Observation Self-Test: [yellow]Skipped (Non-Windows)[/yellow]")
+
+    # 4. Settings table with masked secrets
+    table = Table(title="\nEffective Settings (Secrets Masked)", show_header=True)
     table.add_column("Section", style="cyan", no_wrap=True)
     table.add_column("Key", style="magenta")
     table.add_column("Value", style="green")
