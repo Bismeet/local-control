@@ -180,6 +180,32 @@ class TargetApp:
             x, y = parts[1], parts[2]
             self.root.after(0, lambda: self.root.geometry(f"+{x}+{y}"))
             return {"status": "ok", "x": x, "y": y}
+        elif op == "get_widget_pos" and len(parts) > 1:
+            target = parts[1]
+            widget = None
+            if target == "Alpha":
+                widget = self.btn_alpha
+            elif target == "Beta":
+                widget = self.btn_beta
+            elif target == "Delete":
+                widget = self.btn_delete
+            elif target == "main_entry":
+                widget = self.entry_main
+            elif target == "secret_entry":
+                widget = self.entry_secret
+
+            if widget:
+                rx = widget.winfo_rootx()
+                ry = widget.winfo_rooty()
+                rw = widget.winfo_width()
+                rh = widget.winfo_height()
+                return {
+                    "status": "ok",
+                    "x": rx + rw // 2,
+                    "y": ry + rh // 2,
+                    "bbox": [rx, ry, rw, rh],
+                }
+            return {"status": "error", "message": f"Widget {target} not found"}
         elif op == "quit":
             self.root.after(100, self.root.quit)
             return {"status": "quitting"}

@@ -90,6 +90,98 @@ def observe() -> None:
 
 
 @app.command()
+def act(
+    action_json: str = typer.Argument(..., help="JSON string representing a validated Action"),
+) -> None:
+    """Execute a single validated action from JSON with mandatory human approval."""
+    if is_running_elevated():
+        console.print(
+            "[bold red]Refusing to execute: local-control must not run with Administrator privileges for safety.[/bold red]"
+        )
+        raise typer.Exit(code=1)
+
+    import asyncio
+
+    from pydantic import TypeAdapter
+
+    from local_control.core.actions import Action
+    from local_control.core.coordinates import CoordinateMapper
+    from local_control.core.types import ImageRef, ScreenGeometry
+    from local_control.execution.executor import Executor
+    from local_control.execution.tools.base import ExecutionContext
+    from local_control.execution.tools.input_tool import InputTool
+    from local_control.execution.tools.wait_tool import WaitTool
+    from local_control.execution.tools.window_tool import WindowTool
+    from local_control.safety.approval import CliApprovalGate
+    from local_control.safety.kill_switch import KillSwitch, StopToken
+
+    try:
+        action: Action = TypeAdapter(Action).validate_json(action_json)
+    except Exception as e:
+        console.print(f"[bold red]Invalid action JSON:[/bold red] {e}")
+        raise typer.Exit(code=1) from e
+
+    gate = CliApprovalGate(console=console)
+    if not gate.request(action):
+        console.print("[bold yellow]Action execution cancelled by user.[/bold yellow]")
+        raise typer.Exit(code=0)
+
+    init_dpi_awareness()
+    token = StopToken()
+
+    with KillSwitch(token=token):
+        mapper = None
+        if os.name == "nt":
+            try:
+                capture = ScreenCapture()
+                frame = capture.capture(0)
+                screen_geom = ScreenGeometry(
+                    width_px=frame.width,
+                    height_px=frame.height,
+                    scale_factor=1.0,
+                    monitor_index=0,
+                )
+                image_ref = ImageRef(
+                    path_original="",
+                    path_model="",
+                    model_width=frame.width,
+                    model_height=frame.height,
+                    phash="",
+                )
+                mapper = CoordinateMapper(screen=screen_geom, image=image_ref)
+            except Exception:
+                pass
+
+        ctx = ExecutionContext(
+            run_id="act-manual",
+            stop=token,
+            mapper=mapper,
+            settings=Settings.load(),
+        )
+
+        executor = Executor(
+            tools=[
+                InputTool(),
+                WindowTool(),
+                WaitTool(),
+            ]
+        )
+
+        result = asyncio.run(executor.execute(action, ctx))
+        if result.success:
+            console.print(
+                f"[bold green]Action {result.action_type} executed successfully in {result.duration_ms}ms[/bold green]"
+            )
+        else:
+            err_msg = result.error.message if result.error else "Unknown error"
+            err_code = result.error.code if result.error else "FAILED"
+            console.print(
+                f"[bold red]Action {result.action_type} failed ({err_code}): {err_msg}[/bold red]"
+            )
+            raise typer.Exit(code=1)
+
+
+@app.command()
 def doctor() -> None:
     """Inspect environment readiness, configuration, and observation self-tests."""
     console.print(
