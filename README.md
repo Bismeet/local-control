@@ -104,7 +104,7 @@ Ensure Python 3.11+ is installed and available in your `PATH`. We recommend usin
 
 ### 2. Clone the Repository
 ```powershell
-git clone https://gitlab.com/phoenix-labs-group2/local-control.git
+git clone https://github.com/Bismeet/local-control.git
 cd local-control
 ```
 
