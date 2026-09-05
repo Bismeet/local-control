@@ -48,9 +48,35 @@ PAYMENT_INTENTS = re.compile(
 )
 
 CREDENTIAL_INTENTS = re.compile(
-    r"\b(password|passwd|pin|otp|2fa|cvv)\b",
+    r"\b(password|passwd|pin|otp|2fa|cvv|card[-_ ]?number|cc[-_ ]?number)\b",
     re.IGNORECASE,
 )
+
+SUBMIT_PATTERNS = re.compile(
+    r"\b(send|submit|post|publish|apply|delete|remove|unsubscribe)\b",
+    re.IGNORECASE,
+)
+
+PAYMENT_DOMAINS = {
+    "paypal.com",
+    "checkout.stripe.com",
+    "pay.google.com",
+    "pay.apple.com",
+    "chase.com",
+    "bankofamerica.com",
+    "wellsfargo.com",
+}
+
+
+def _get_snapshot_ref_text(snapshot: str | None, ref: str | None) -> str:
+    if not snapshot or not ref:
+        return ""
+    target = f"[{ref}]"
+    for line in snapshot.splitlines():
+        if target in line:
+            return line
+    return ""
+
 
 SECRET_PATTERNS = [
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
@@ -165,13 +191,23 @@ def classify(
     if act_type == "browser_type":
         selector = getattr(action, "selector", "") or ""
         target_desc = action.target_description or ""
-        if "password" in selector.lower() or CREDENTIAL_INTENTS.search(target_desc):
+        expected = action.expected_outcome or ""
+        ref = getattr(action, "ref", None)
+        ref_text = _get_snapshot_ref_text(
+            obs.browser.snapshot if (obs and obs.browser) else None, ref
+        )
+        combined = f"{selector} {target_desc} {expected} {ref_text}".lower()
+        if (
+            "password" in selector.lower()
+            or "type=password" in ref_text.lower()
+            or CREDENTIAL_INTENTS.search(combined)
+        ):
             return (
                 "BLOCKED",
                 "B-03",
                 ["Browser password or credential input targeted"],
                 False,
-                f"Blocked browser password typing: {target_desc}",
+                f"Blocked browser password typing: {target_desc or ref_text or selector}",
             )
 
     # B-04: Payment intent
@@ -181,13 +217,28 @@ def classify(
     ):
         target_desc = action.target_description or ""
         expected = action.expected_outcome or ""
-        if PAYMENT_INTENTS.search(target_desc) or PAYMENT_INTENTS.search(expected):
+        selector = getattr(action, "selector", "") or ""
+        ref = getattr(action, "ref", None)
+        ref_text = _get_snapshot_ref_text(
+            obs.browser.snapshot if (obs and obs.browser) else None, ref
+        )
+        combined_text = f"{target_desc} {expected} {selector} {ref_text}"
+
+        is_payment_domain = False
+        if obs and obs.browser and obs.browser.url:
+            from urllib.parse import urlparse
+
+            netloc = urlparse(obs.browser.url).netloc.lower()
+            if any(netloc == pd or netloc.endswith("." + pd) for pd in PAYMENT_DOMAINS):
+                is_payment_domain = True
+
+        if PAYMENT_INTENTS.search(combined_text) or is_payment_domain:
             return (
                 "BLOCKED",
                 "B-04",
-                [f"Action mentions payment intent: '{target_desc}' / '{expected}'"],
+                [f"Action mentions payment intent: '{combined_text.strip()}'"],
                 False,
-                f"Blocked payment intent action: {target_desc}",
+                f"Blocked payment intent action: {target_desc or ref_text or selector or 'payment domain'}",
             )
 
     # B-05 & B-06: Filesystem actions
@@ -377,15 +428,36 @@ def classify(
             )
 
     # C-08: Browser form submit / send
-    if act_type in ("browser_click", "browser_type") and getattr(action, "submit", False):
+    if act_type in ("browser_click", "browser_type"):
+        is_submit_flag = getattr(action, "submit", False)
         target_desc = action.target_description or ""
-        return (
-            "CONFIRM",
-            "C-08",
-            ["Browser form submission requires confirmation"],
-            False,
-            f"Submit browser form: {target_desc}",
+        selector = (getattr(action, "selector", "") or "").lower()
+        ref = getattr(action, "ref", None)
+        ref_text = _get_snapshot_ref_text(
+            obs.browser.snapshot if (obs and obs.browser) else None, ref
         )
+        combined = f"{target_desc} {selector} {ref_text}"
+        if (
+            is_submit_flag
+            or "type=submit" in selector
+            or "type=submit" in ref_text.lower()
+            or SUBMIT_PATTERNS.search(combined)
+        ):
+            return (
+                "CONFIRM",
+                "C-08",
+                ["Browser form submission requires confirmation"],
+                False,
+                f"Submit browser form: {target_desc or ref_text or selector or 'submit'}",
+            )
+        if settings and settings.safety.confirm_browser_type and act_type == "browser_type":
+            return (
+                "CONFIRM",
+                "C-08",
+                ["Browser typing confirmation required by safety settings"],
+                False,
+                f"Type in browser: {target_desc or ref_text or selector}",
+            )
 
     # C-10: close_window (not blocked)
     if isinstance(action, CloseWindowAction):
@@ -419,6 +491,22 @@ def classify(
             True,
             "Download file in browser",
         )
+
+    # C-13: browser_navigate to new host
+    if act_type == "browser_navigate" and settings and settings.safety.confirm_new_hosts:
+        nav_url = getattr(action, "url", "")
+        from urllib.parse import urlparse
+
+        host = urlparse(nav_url).netloc
+        seen_hosts = getattr(settings.safety, "seen_hosts", None)
+        if host and (seen_hosts is None or host not in seen_hosts):
+            return (
+                "CONFIRM",
+                "C-13",
+                [f"First visit to host '{host}' requires confirmation"],
+                True,
+                f"Navigate to new host {host}",
+            )
 
     # C-16: Large text or secret patterns in type_text
     if isinstance(action, TypeTextAction):

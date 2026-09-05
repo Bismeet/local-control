@@ -34,10 +34,14 @@ async def test_window_tool_focus_and_close() -> None:
 
     proc = subprocess.Popen([sys.executable, str(target_app_py)])
     try:
-        time.sleep(1.5)
         wm = WindowManager()
-        windows = wm.list_windows()
-        target_win = next((w for w in windows if "LC Test Target" in w.title), None)
+        target_win = None
+        for _ in range(25):
+            windows = wm.list_windows()
+            target_win = next((w for w in windows if "LC Test Target" in w.title), None)
+            if target_win is not None:
+                break
+            time.sleep(0.2)
         assert target_win is not None, "Target app window not found"
 
         hwnd = target_win.handle

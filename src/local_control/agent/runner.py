@@ -134,7 +134,7 @@ class AgentRunner:
             run_id=rid,
             goal=goal,
             mode=autonomy_mode,
-            settings_snapshot=self.settings.model_dump(),
+            settings_snapshot=self.settings.model_dump(mode="json"),
         )
         state = TaskState(
             run_id=rid,
@@ -195,6 +195,13 @@ class AgentRunner:
                     zoom_rect=zoom_rect,
                 )
                 zoom_rect = None
+
+                # Enrich with browser observation if BrowserTool is active
+                b_tool = self.executor.get_tool("browser_navigate")
+                if b_tool is not None and hasattr(b_tool, "get_observation"):
+                    b_obs = await b_tool.get_observation()
+                    if b_obs is not None:
+                        obs = obs.model_copy(update={"browser": b_obs})
 
                 # 4. Propose Next Action
                 try:

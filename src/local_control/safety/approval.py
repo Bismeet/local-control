@@ -1,7 +1,7 @@
 """Human approval gate abstractions and CLI prompt implementation."""
 
 import asyncio
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import structlog
 from rich.console import Console
@@ -141,11 +141,13 @@ class AutoApprovalGate:
         approve: bool = True,
         approve_for_run: bool = False,
         user_answer: str = "ok",
+        auto_approved_categories: set[str] | None = None,
     ) -> None:
         self.approve = approve
         self.approve_for_run = approve_for_run
         self.user_answer = user_answer
-        self.history: list[tuple[Action, ApprovalDecision]] = []
+        self.auto_approved_categories = auto_approved_categories
+        self.history: list[dict[str, Any]] = []
 
     def request(
         self,
@@ -153,14 +155,26 @@ class AutoApprovalGate:
         verdict: Verdict | None = None,
         screenshot_path: str | None = None,
     ) -> ApprovalDecision:
-        if self.approve_for_run and verdict and verdict.grantable_for_run:
+        if self.auto_approved_categories is not None:
+            if verdict and verdict.category in self.auto_approved_categories:
+                dec = ApprovalDecision(decision="approved")
+            else:
+                dec = ApprovalDecision(decision="denied")
+        elif self.approve_for_run and verdict and verdict.grantable_for_run:
             dec = ApprovalDecision(decision="approved_for_run")
         elif self.approve:
             dec = ApprovalDecision(decision="approved")
         else:
             dec = ApprovalDecision(decision="denied")
 
-        self.history.append((action, dec))
+        self.history.append(
+            {
+                "action": action,
+                "decision": dec,
+                "verdict": verdict,
+                "category": verdict.category if verdict else None,
+            }
+        )
         logger.info("auto_approval_gate.decision", action_type=action.type, decision=dec.decision)
         return dec
 

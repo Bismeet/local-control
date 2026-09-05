@@ -50,6 +50,7 @@ class SafetySettings(BaseModel):
     confirm_new_hosts: bool = False
     confirm_browser_type: bool = False
     allowed_unc_hosts: list[str] = Field(default_factory=list)
+    seen_hosts: set[str] = Field(default_factory=set)
 
     @field_validator("max_destructive_per_run")
     @classmethod
@@ -96,6 +97,7 @@ class BrowserSettings(BaseModel):
     channel: str = ""
     profile_dir: str = ""
     download_dir: str = ""
+    snapshot_max_nodes: int = 400
 
 
 class ControlCenterSettings(BaseModel):
@@ -149,7 +151,7 @@ class Settings(BaseSettings):
 
     def masked_dict(self) -> dict[str, Any]:
         """Return a dictionary of effective settings with sensitive values masked."""
-        data = self.model_dump()
+        data = self.model_dump(mode="json")
 
         # Mask api key values or sensitive tokens if present
         def _mask_sensitive(d: dict[str, Any]) -> None:

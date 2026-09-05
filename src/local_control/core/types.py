@@ -19,6 +19,8 @@ __all__ = [
     "UiElement",
     "ErrorInfo",
     "ActionResult",
+    "BrowserObservation",
+    "BrowserTabInfo",
     "Observation",
     "Assessment",
     "PlanStepStatus",
@@ -135,6 +137,31 @@ class ActionResult(BaseModel):
     error: ErrorInfo | None = None
 
 
+class BrowserTabInfo(BaseModel):
+    """Information about an open browser tab."""
+
+    model_config = ConfigDict(frozen=True)
+
+    index: int
+    url: str
+    title: str
+    active: bool = False
+
+
+class BrowserObservation(BaseModel):
+    """Observation data extracted from browser automation."""
+
+    model_config = ConfigDict(frozen=True)
+
+    url: str
+    title: str
+    snapshot: str
+    tabs: list[BrowserTabInfo] = Field(default_factory=list)
+    active_tab_index: int = 0
+    tab_count: int = 0
+    is_agent_browser_foreground: bool = False
+
+
 class Observation(BaseModel):
     """Complete observation payload passed to planner."""
 
@@ -149,6 +176,7 @@ class Observation(BaseModel):
     last_result: ActionResult | None = None
     ocr: list[OcrSpan] | None = None
     ui_elements: list[UiElement] | None = None
+    browser: BrowserObservation | None = None
 
 
 class Assessment(BaseModel):

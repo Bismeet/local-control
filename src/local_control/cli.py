@@ -159,6 +159,7 @@ def act(
             settings=Settings.load(),
         )
 
+        from local_control.execution.tools.browser_tool import BrowserTool
         from local_control.execution.tools.filesystem_tool import FilesystemTool
         from local_control.execution.tools.observation_tool import ObservationTool
         from local_control.execution.tools.terminal_tool import TerminalTool
@@ -171,6 +172,7 @@ def act(
                 ObservationTool(),
                 FilesystemTool(),
                 TerminalTool(),
+                BrowserTool(),
             ]
         )
 
@@ -207,6 +209,7 @@ def run(
     from local_control.agent.planner import Planner
     from local_control.agent.runner import AgentRunner
     from local_control.execution.executor import Executor
+    from local_control.execution.tools.browser_tool import BrowserTool
     from local_control.execution.tools.filesystem_tool import FilesystemTool
     from local_control.execution.tools.input_tool import InputTool
     from local_control.execution.tools.observation_tool import ObservationTool
@@ -229,6 +232,7 @@ def run(
             ObservationTool(),
             FilesystemTool(),
             TerminalTool(),
+            BrowserTool(),
         ]
     )
     observer = Observer(settings=settings)

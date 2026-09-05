@@ -43,12 +43,15 @@ def test_window_manager_detects_target_app() -> None:
     proc = subprocess.Popen([sys.executable, str(target_app_py)])
 
     try:
-        # Give Tkinter time to map window
-        time.sleep(1.5)
         wm = WindowManager()
-        windows = wm.list_windows()
+        target_windows = []
+        for _ in range(25):
+            windows = wm.list_windows()
+            target_windows = [w for w in windows if "LC Test Target" in w.title]
+            if target_windows:
+                break
+            time.sleep(0.2)
 
-        target_windows = [w for w in windows if "LC Test Target" in w.title]
         assert len(target_windows) >= 1
 
         target_win = target_windows[0]

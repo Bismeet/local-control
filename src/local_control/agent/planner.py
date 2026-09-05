@@ -125,6 +125,18 @@ class Planner:
             )
             prompt_lines.append(f"- Last Action Result: {lr.action_type} -> {status}")
 
+        if obs.browser:
+            prompt_lines.append("# Browser State")
+            prompt_lines.append(f"- URL: {obs.browser.url}")
+            prompt_lines.append(f"- Title: '{obs.browser.title}'")
+            if obs.browser.tabs:
+                prompt_lines.append(f"- Tabs ({len(obs.browser.tabs)} total):")
+                for tab in obs.browser.tabs:
+                    act_mark = " (ACTIVE)" if tab.active else ""
+                    prompt_lines.append(f"  * [{tab.index}] '{tab.title}' <{tab.url}>{act_mark}")
+            if obs.browser.snapshot:
+                prompt_lines.append(f"- Accessibility Snapshot:\n{obs.browser.snapshot}")
+
         prompt_lines.append(
             "\nPropose the next typed action in valid JSON conforming to PlannerResponse."
         )

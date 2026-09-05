@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Customer Support Form</title>
+</head>
+<body>
+    <h1>Customer Support</h1>
+    <p>Please fill in the form below to contact support.</p>
+
+    <form id="support-form" method="POST" action="/submit">
+        <div>
+            <label for="name">Name:</label>
+            <input type="text" id="name" name="name" placeholder="Enter your name" required />
+        </div>
+        <div>
+            <label for="email">Email:</label>
+            <input type="email" id="email" name="email" placeholder="Enter your email" required />
+        </div>
+        <div>
+            <label for="category">Category:</label>
+            <select id="category" name="category">
+                <option value="General">General</option>
+                <option value="Billing">Billing</option>
+                <option value="Technical">Technical</option>
+            </select>
+        </div>
+        <div>
+            <label for="message">Message:</label>
+            <textarea id="message" name="message" placeholder="Describe your issue" rows="4" cols="50" required></textarea>
+        </div>
+        <div>
+            <button type="submit" id="submit-btn">Submit</button>
+        </div>
+    </form>
+
+    <div style="margin-top: 40px; padding: 15px; border: 1px solid #ccc; background: #f9f9f9;">
+        <h3>Premium Services</h3>
+        <p>Looking for priority support and faster response times?</p>
+        <a href="/checkout.html" id="upgrade-link">Upgrade and Pay now</a>
+    </div>
+
+    <div id="confirmation" style="display: none; margin-top: 20px;">
+        <h2>Support Request Received</h2>
+        <p id="confirm-msg">Thank you Alex Doe, your support request has been submitted.</p>
+    </div>
+
+    <script>
+        document.getElementById('support-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const name = document.getElementById('name').value;
+            const email = document.getElementById('email').value;
+            const cat = document.getElementById('category').value;
+            const msg = document.getElementById('message').value;
+            
+            fetch('/submit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name, email: email, category: cat, message: msg })
+            }).then(() => {
+                document.getElementById('support-form').style.display = 'none';
+                document.getElementById('confirmation').style.display = 'block';
+                document.getElementById('confirm-msg').innerText = `Thank you ${name}, your support request has been submitted. Category: ${cat}`;
+            });
+        });
+    </script>
+</body>
+</html>
