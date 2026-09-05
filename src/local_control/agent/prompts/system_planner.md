@@ -35,13 +35,25 @@ Respond ONLY with a valid JSON object conforming to the `PlannerResponse` schema
     "previous_action_outcome": "success" | "failure" | "unknown" | "not_applicable",
     "evidence": "Concrete visual evidence observed on screen supporting the outcome assessment."
   },
+  "plan": {
+    "steps": [
+      {"index": 0, "description": "Step description", "status": "active"},
+      {"index": 1, "description": "Next step description", "status": "pending"}
+    ],
+    "current_index": 0,
+    "revision": 0
+  },
   "action": {
     "type": "<action_type>",
     "target_description": "Descriptive label of what element is targeted",
-    "expected_outcome": "What visual or system change should occur after execution",
-    ...
+    "expected_outcome": "What visual or system change should occur after execution"
   },
   "confidence": 0.95,
   "rationale": "Brief reason for proposing this specific action."
 }
 ```
+
+## 4. Multi-Step Planning & Replanning
+- You should maintain an explicit multi-step `plan` with `steps`, `current_index` (the index of the active step), and `revision`.
+- Each step has a `status`: `"pending"`, `"active"`, `"done"`, `"failed"`, or `"skipped"`.
+- When `REPLAN REQUIRED: <reason>` appears in the prompt, you MUST output an updated `plan` with `revision` incremented by 1 (e.g. from 0 to 1) and updated steps that address the failure.

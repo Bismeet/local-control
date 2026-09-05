@@ -105,6 +105,7 @@ class AgentRunner:
 
         last_result: ActionResult | None = None
         run_dir = self.run_store.get_run_dir(rid)
+        step_failures: dict[int, int] = {}
 
         # Start KillSwitch
         with self.kill_switch:
@@ -138,8 +139,63 @@ class AgentRunner:
                     logger.error("agent_runner.planner_failed", error=str(e))
                     break
 
+                # Update state plan if returned
+                if plan_resp.plan:
+                    state.plan = plan_resp.plan
+
                 # Clear feedback queue now that planner has processed it
                 state.feedback_queue.clear()
+
+                # Check for replan trigger: assessment failure twice on the same step
+                active_step_idx = state.plan.current_index if state.plan else 0
+                if plan_resp.assessment.previous_action_outcome == "failure":
+                    step_failures[active_step_idx] = step_failures.get(active_step_idx, 0) + 1
+                    logger.warning(
+                        "agent_runner.step_failure_recorded",
+                        step_index=active_step_idx,
+                        failures=step_failures[active_step_idx],
+                        evidence=plan_resp.assessment.evidence,
+                    )
+                    if step_failures[active_step_idx] >= 2:
+                        logger.info(
+                            "agent_runner.replan_triggered",
+                            step_index=active_step_idx,
+                            failures=step_failures[active_step_idx],
+                        )
+                        replan_reason = (
+                            f"Step {active_step_idx} failed {step_failures[active_step_idx]} times consecutively: "
+                            f"{plan_resp.assessment.evidence}"
+                        )
+                        try:
+                            plan_resp = await self.planner.propose(
+                                state=state,
+                                obs=obs,
+                                replan_reason=replan_reason,
+                            )
+                            if plan_resp.plan:
+                                state.plan = plan_resp.plan
+                            step_failures[state.plan.current_index if state.plan else 0] = 0
+                        except Exception as e:
+                            state.status = "FAILED_PROVIDER"
+                            logger.error("agent_runner.replan_failed", error=str(e))
+                            break
+                elif plan_resp.assessment.previous_action_outcome == "success":
+                    step_failures[active_step_idx] = 0
+
+                # Log active plan step
+                if (
+                    state.plan
+                    and state.plan.steps
+                    and 0 <= state.plan.current_index < len(state.plan.steps)
+                ):
+                    ps = state.plan.steps[state.plan.current_index]
+                    logger.info(
+                        "agent_runner.active_plan_step",
+                        revision=state.plan.revision,
+                        step_index=ps.index,
+                        description=ps.description,
+                        status=ps.status,
+                    )
 
                 # 5. Check for terminal actions
                 action = plan_resp.action
@@ -296,9 +352,21 @@ class AgentRunner:
             f"- **Final Status**: {state.status}",
             f"- **Steps Executed**: {state.current_step}",
             f"- **Timestamp**: {datetime.now(UTC).isoformat()}",
-            "",
-            "## Steps History",
         ]
+        if state.plan:
+            lines.append("")
+            lines.append("## Execution Plan")
+            lines.append(f"- **Revision**: {state.plan.revision}")
+            lines.append(f"- **Active Step Index**: {state.plan.current_index}")
+            for ps in state.plan.steps:
+                lines.append(f"- Step {ps.index} [{ps.status}]: {ps.description}")
+
+        lines.extend(
+            [
+                "",
+                "## Steps History",
+            ]
+        )
         for step in state.steps:
             res_str = "SUCCESS" if step.result.success else "FAILURE"
             act_type = step.planner_response.action.type

@@ -8,6 +8,7 @@ from typing import Any
 import structlog
 from pydantic import ValidationError
 
+from local_control.agent.history import HistoryCondenser
 from local_control.core.errors import PlannerError
 from local_control.core.types import Observation, PlannerResponse, TaskState
 from local_control.models.provider import (
@@ -39,6 +40,7 @@ class Planner:
         self,
         provider: ModelProvider,
         system_prompt_path: Path | None = None,
+        history_condenser: HistoryCondenser | None = None,
     ) -> None:
         self.provider = provider
         prompt_file = system_prompt_path or DEFAULT_SYSTEM_PROMPT_PATH
@@ -46,6 +48,7 @@ class Planner:
             self.system_prompt = prompt_file.read_text(encoding="utf-8")
         else:
             self.system_prompt = "You are local-control. Propose typed actions as JSON."
+        self.history_condenser = history_condenser or HistoryCondenser()
 
     def build_request(
         self,
@@ -53,6 +56,7 @@ class Planner:
         obs: Observation,
         error_feedback: str | None = None,
         png_bytes: bytes | None = None,
+        replan_reason: str | None = None,
     ) -> ModelRequest:
         """Construct the prompt messages, system instructions, and schema for the model."""
         prompt_lines: list[str] = [
@@ -60,18 +64,31 @@ class Planner:
             f"# Autonomy Mode\n{state.autonomy_mode}\n",
         ]
 
-        # 1. Condensed history
-        if state.steps:
-            prompt_lines.append("# Execution History (Recent Steps)")
-            for step in state.steps[-6:]:
-                res_summary = "SUCCESS" if step.result.success else "FAILURE"
-                prompt_lines.append(
-                    f"- Step {step.step_index}: proposed {step.planner_response.action.type} "
-                    f"-> {res_summary} ({step.result.duration_ms}ms)"
-                )
+        # 1. Replan notice if triggered
+        if replan_reason:
+            prompt_lines.append(f"# REPLAN REQUIRED: {replan_reason}")
+            prompt_lines.append(
+                "You MUST return an updated `plan` in your response with `revision` incremented by 1, "
+                "and reflect required changes to the plan steps.\n"
+            )
+
+        # 2. Current Plan (if any)
+        if state.plan:
+            prompt_lines.append("# Current Plan")
+            prompt_lines.append(
+                f"- Revision: {state.plan.revision}, Active Step: {state.plan.current_index}"
+            )
+            for step in state.plan.steps:
+                prompt_lines.append(f"  [{step.index}] ({step.status}) {step.description}")
             prompt_lines.append("")
 
-        # 2. Feedback queue items
+        # 3. Condensed history
+        history_lines = self.history_condenser.condense(state.steps)
+        if history_lines:
+            prompt_lines.extend(history_lines)
+            prompt_lines.append("")
+
+        # 4. Feedback queue items
         if state.feedback_queue or error_feedback:
             prompt_lines.append("# Feedback & Runtime Notices")
             for fb in state.feedback_queue:
@@ -151,6 +168,7 @@ class Planner:
         state: TaskState,
         obs: Observation,
         png_bytes: bytes | None = None,
+        replan_reason: str | None = None,
     ) -> PlannerResponse:
         """Call model and return validated PlannerResponse with up to 2 retries."""
         max_attempts = 3
@@ -162,12 +180,24 @@ class Planner:
                 obs=obs,
                 error_feedback=error_feedback,
                 png_bytes=png_bytes,
+                replan_reason=replan_reason,
             )
 
             response = await self.provider.complete(req)
 
             try:
                 plan_resp = self.parse_response(response.text, response.parsed)
+
+                # If replan was requested and an existing plan exists, ensure revision incremented
+                if replan_reason is not None and state.plan is not None:
+                    if plan_resp.plan is None:
+                        raise ValueError("Replan requested but no `plan` was provided in response.")
+                    if plan_resp.plan.revision <= state.plan.revision:
+                        raise ValueError(
+                            f"Replan requested with revision > {state.plan.revision}, "
+                            f"but response had revision {plan_resp.plan.revision}."
+                        )
+
                 logger.info(
                     "planner.proposal_parsed",
                     action_type=plan_resp.action.type,

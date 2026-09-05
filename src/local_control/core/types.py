@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from local_control.core.actions import Action, Point, Rect
 
@@ -173,6 +173,14 @@ class Plan(BaseModel):
     steps: list[PlanStep] = Field(default_factory=list)
     current_index: int = Field(default=0, ge=0)
     revision: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_plan_consistency(self) -> "Plan":
+        if self.steps and self.current_index >= len(self.steps):
+            raise ValueError(
+                f"current_index {self.current_index} is out of bounds for {len(self.steps)} steps"
+            )
+        return self
 
 
 class PlannerResponse(BaseModel):
