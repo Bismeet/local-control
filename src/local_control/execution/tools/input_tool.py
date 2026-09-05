@@ -29,8 +29,24 @@ logger = structlog.get_logger(__name__)
 class InputTool(Tool):
     """Executes mouse and keyboard actions with coordinate mapping and failsafe checks."""
 
-    def __init__(self, backend: InputBackend | None = None) -> None:
-        self.backend = backend or PyAutoGuiBackend()
+    def __init__(
+        self,
+        backend: InputBackend | None = None,
+        backend_name: str | None = None,
+    ) -> None:
+        import os
+
+        if backend is not None:
+            self.backend = backend
+        elif backend_name == "sendinput" or (backend_name is None and os.name == "nt"):
+            try:
+                from local_control.execution.tools.sendinput_backend import SendInputBackend
+
+                self.backend = SendInputBackend()
+            except Exception:
+                self.backend = PyAutoGuiBackend()
+        else:
+            self.backend = PyAutoGuiBackend()
 
     @property
     def handles(self) -> frozenset[str]:
@@ -51,6 +67,23 @@ class InputTool(Tool):
             return ctx.mapper.to_screen(point)
         return point
 
+    def _resolve_point(self, action: Action, ctx: ExecutionContext) -> tuple[Point, Point]:
+        """Resolve model image-space Point and physical screen Point honoring ref."""
+        ref = getattr(action, "ref", None)
+        if ref and ctx.ui_elements:
+            matched = next(
+                (el for el in ctx.ui_elements if el.ref.lower() == str(ref).lower()),
+                None,
+            )
+            if matched:
+                cx = matched.bbox.x + matched.bbox.width // 2
+                cy = matched.bbox.y + matched.bbox.height // 2
+                model_pt = Point(x=cx, y=cy)
+                return model_pt, self._map_point(model_pt, ctx)
+
+        model_pt = Point(x=getattr(action, "x", 0), y=getattr(action, "y", 0))
+        return model_pt, self._map_point(model_pt, ctx)
+
     async def execute(self, action: Action, ctx: ExecutionContext) -> ActionResult:
         started_at = datetime.now(UTC)
         start_mono = time.monotonic()
@@ -62,12 +95,13 @@ class InputTool(Tool):
             data: dict[str, Any] = {}
 
             if isinstance(action, ClickAction):
-                screen_pt = self._map_point(Point(x=action.x, y=action.y), ctx)
+                model_pt, screen_pt = self._resolve_point(action, ctx)
                 data = {
-                    "image_x": action.x,
-                    "image_y": action.y,
+                    "image_x": model_pt.x,
+                    "image_y": model_pt.y,
                     "screen_x": screen_pt.x,
                     "screen_y": screen_pt.y,
+                    "ref": getattr(action, "ref", None),
                     "button": action.button,
                     "clicks": action.clicks,
                 }
@@ -82,12 +116,13 @@ class InputTool(Tool):
                     await asyncio.sleep(action.settle_ms / 1000.0)
 
             elif isinstance(action, MoveMouseAction):
-                screen_pt = self._map_point(Point(x=action.x, y=action.y), ctx)
+                model_pt, screen_pt = self._resolve_point(action, ctx)
                 data = {
-                    "image_x": action.x,
-                    "image_y": action.y,
+                    "image_x": model_pt.x,
+                    "image_y": model_pt.y,
                     "screen_x": screen_pt.x,
                     "screen_y": screen_pt.y,
+                    "ref": getattr(action, "ref", None),
                 }
                 await asyncio.to_thread(self.backend.move_to, screen_pt.x, screen_pt.y)
                 if action.settle_ms > 0:

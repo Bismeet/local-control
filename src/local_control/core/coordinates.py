@@ -12,8 +12,8 @@ class CoordinateMapper:
         self,
         screen: ScreenGeometry,
         image: ImageRef,
-        origin_x: int = 0,
-        origin_y: int = 0,
+        origin_x: int | None = None,
+        origin_y: int | None = None,
     ) -> None:
         if image.model_width <= 0 or image.model_height <= 0:
             raise CoordinateMappingError("Model image dimensions must be positive.")
@@ -22,8 +22,8 @@ class CoordinateMapper:
 
         self.screen = screen
         self.image = image
-        self.origin_x = origin_x
-        self.origin_y = origin_y
+        self.origin_x = screen.left_px if origin_x is None else origin_x
+        self.origin_y = screen.top_px if origin_y is None else origin_y
 
         self.scale_x = screen.width_px / image.model_width
         self.scale_y = screen.height_px / image.model_height

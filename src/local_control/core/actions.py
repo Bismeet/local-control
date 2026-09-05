@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 
 class Point(BaseModel):
@@ -49,23 +49,37 @@ class ActionBase(BaseModel):
 
 
 class ClickAction(ActionBase):
-    """Send mouse click at image-space coordinates."""
+    """Send mouse click at image-space coordinates or UI element ref."""
 
     type: Literal["click"] = "click"
-    x: int
-    y: int
+    x: int | None = None
+    y: int | None = None
+    ref: str | None = None
     button: Literal["left", "right", "middle"] = "left"
     clicks: Literal[1, 2] = 1
     settle_ms: int = 500
 
+    @model_validator(mode="after")
+    def validate_target(self) -> "ClickAction":
+        if (self.x is None or self.y is None) and not self.ref:
+            raise ValueError("ClickAction requires either (x, y) coordinates or ref.")
+        return self
+
 
 class MoveMouseAction(ActionBase):
-    """Move cursor to image-space coordinates."""
+    """Move cursor to image-space coordinates or UI element ref."""
 
     type: Literal["move_mouse"] = "move_mouse"
-    x: int
-    y: int
+    x: int | None = None
+    y: int | None = None
+    ref: str | None = None
     settle_ms: int = 100
+
+    @model_validator(mode="after")
+    def validate_target(self) -> "MoveMouseAction":
+        if (self.x is None or self.y is None) and not self.ref:
+            raise ValueError("MoveMouseAction requires either (x, y) coordinates or ref.")
+        return self
 
 
 class DragAction(ActionBase):

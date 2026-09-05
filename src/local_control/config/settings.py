@@ -39,6 +39,7 @@ class ObservationSettings(BaseModel):
     ocr_always: bool = False
     set_of_marks: bool = False
     max_windows: int = Field(default=15, ge=1)
+    monitor_index: int = 0
 
 
 class SafetySettings(BaseModel):
@@ -74,6 +75,7 @@ class ExecutionSettings(BaseModel):
 
     action_timeout_s: int = Field(default=30, ge=1)
     shell_timeout_s: int = Field(default=120, ge=1)
+    input_backend: Literal["sendinput", "pyautogui"] = "sendinput"
 
 
 class TerminalSettings(BaseModel):

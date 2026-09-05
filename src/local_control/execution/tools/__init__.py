@@ -5,6 +5,7 @@ from local_control.execution.tools.input_backend import (
     FakeInputBackend,
     InputBackend,
     PyAutoGuiBackend,
+    SendInputBackend,
 )
 from local_control.execution.tools.input_tool import InputTool
 from local_control.execution.tools.observation_tool import ObservationTool
@@ -21,6 +22,7 @@ __all__ = [
     "InputTool",
     "ObservationTool",
     "PyAutoGuiBackend",
+    "SendInputBackend",
     "TerminalTool",
     "Tool",
     "WaitTool",

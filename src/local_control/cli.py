@@ -485,12 +485,97 @@ def doctor() -> None:
                 f"  Black Frame Detection Heuristic: {'[green]PASS[/green]' if heuristic_ok else '[red]FAIL[/red]'}"
             )
 
+            # 4. Phase 11 Hardening Diagnostics
+            console.print("\n[bold]Phase 11 Hardening Diagnostics:[/bold]")
+
+            # Multi-Monitor topology
+            monitors = capture.list_monitors()
+            console.print(f"  Displays Detected: [green]{len(monitors)}[/green]")
+            for m in monitors:
+                tag = (
+                    " (Primary)"
+                    if m.get("is_primary")
+                    else (" (All Displays)" if m.get("is_all") else "")
+                )
+                console.print(
+                    f"    Display #{m['index']}: {m['width']}x{m['height']} at ({m['left']}, {m['top']}){tag}"
+                )
+
+            # SendInput injection
+            user32 = ctypes.windll.user32
+            has_sendinput = hasattr(user32, "SendInput")
+            console.print(
+                f"  SendInput API Available: {'[green]YES[/green]' if has_sendinput else '[red]NO[/red]'}"
+            )
+
+            # Global hotkey registration check
+            MOD_ALT = 0x0001
+            VK_F12 = 0x7B
+            TEST_ID = 9876
+            hk_registered = user32.RegisterHotKey(None, TEST_ID, MOD_ALT, VK_F12) != 0
+            if hk_registered:
+                user32.UnregisterHotKey(None, TEST_ID)
+                console.print(
+                    "  Global Hotkey Registration: [green]PASS (unblocked by EDR)[/green]"
+                )
+            else:
+                console.print(
+                    "  Global Hotkey Registration: [yellow]BLOCKED or reserved by system[/yellow]"
+                )
+
+            # Antivirus / EDR inspection
+            av_name = "None detected"
+            try:
+                import subprocess
+
+                res = subprocess.run(
+                    [
+                        "powershell",
+                        "-NoProfile",
+                        "-Command",
+                        "Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct | Select-Object -ExpandProperty displayName",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    av_name = res.stdout.strip().replace("\r\n", ", ")
+            except Exception:
+                pass
+            console.print(f"  Active Antivirus / EDR: [cyan]{av_name}[/cyan]")
+
+            # UIA accessibility check
+            try:
+                from pywinauto.uia_element_info import UIAElementInfo
+
+                desktop_info = UIAElementInfo(ctypes.windll.user32.GetDesktopWindow())
+                uia_status = f"[green]READY ({desktop_info.control_type})[/green]"
+            except Exception as e:
+                uia_status = f"[yellow]UNAVAILABLE ({e})[/yellow]"
+            console.print(f"  UIA Accessibility Engine: {uia_status}")
+
+            # RapidOCR status
+            try:
+                from local_control.observation.ocr import RapidOCRAdapter
+
+                ocr = RapidOCRAdapter()
+                ocr_avail = ocr.is_available()
+                ocr_status = (
+                    "[green]AVAILABLE[/green]"
+                    if ocr_avail
+                    else "[yellow]NOT INSTALLED (optional)[/yellow]"
+                )
+            except Exception:
+                ocr_status = "[yellow]NOT INSTALLED (optional)[/yellow]"
+            console.print(f"  RapidOCR Engine: {ocr_status}")
+
         except Exception as e:
             console.print(f"  Observation Self-Test: [red]FAILED ({e})[/red]")
     else:
         console.print("  Observation Self-Test: [yellow]Skipped (Non-Windows)[/yellow]")
 
-    # 4. Settings table with masked secrets
+    # 5. Settings table with masked secrets
     table = Table(title="\nEffective Settings (Secrets Masked)", show_header=True)
     table.add_column("Section", style="cyan", no_wrap=True)
     table.add_column("Key", style="magenta")

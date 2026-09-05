@@ -592,6 +592,7 @@ class AgentRunner:
                     mapper=mapper,
                     settings=self.settings,
                     workdir=run_dir,
+                    ui_elements=obs.ui_elements,
                 )
 
                 if self.event_bus:

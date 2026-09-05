@@ -1,5 +1,4 @@
-"""Observation builder composing screen capture, window management, and coordinate mapping."""
-
+import io
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,8 +13,10 @@ from local_control.core.types import (
     ActionResult,
     ImageRef,
     Observation,
+    OcrSpan,
     ScreenGeometry,
     ScreenState,
+    UiElement,
     WindowInfo,
 )
 from local_control.observation.image import (
@@ -24,7 +25,9 @@ from local_control.observation.image import (
     frame_to_pillow,
     is_black_frame,
 )
+from local_control.observation.ocr import OCRProvider, RapidOCRAdapter
 from local_control.observation.screen import ScreenCapture
+from local_control.observation.uia import UiElementExtractor, annotate_set_of_marks
 from local_control.observation.windows import WindowManager
 
 
@@ -37,11 +40,15 @@ class Observer:
         window_manager: WindowManager | None = None,
         run_store: RunStore | None = None,
         settings: Settings | None = None,
+        ocr_provider: OCRProvider | None = None,
+        uia_extractor: UiElementExtractor | None = None,
     ) -> None:
         self.screen_capture = screen_capture or ScreenCapture()
         self.window_manager = window_manager or WindowManager()
         self.run_store = run_store
         self.settings = settings or Settings.load()
+        self.ocr_provider = ocr_provider or RapidOCRAdapter()
+        self.uia_extractor = uia_extractor or UiElementExtractor()
 
     def _map_window_to_image(self, win: WindowInfo, mapper: CoordinateMapper) -> WindowInfo:
         """Transform window bbox from screen coordinates to model image coordinates."""
@@ -76,15 +83,17 @@ class Observer:
         """Capture the screen and desktop state and build a typed Observation."""
         captured_at = datetime.now(UTC)
 
-        # 1. Capture primary monitor physical pixels
-        raw_frame = self.screen_capture.capture(monitor_index=0)
+        target_mon = getattr(self.settings.observation, "monitor_index", 0)
+        raw_frame = self.screen_capture.capture(monitor_index=target_mon)
         orig_img: Image.Image = frame_to_pillow(raw_frame)
 
         screen_geo = ScreenGeometry(
             width_px=raw_frame.width,
             height_px=raw_frame.height,
             scale_factor=1.0,
-            monitor_index=0,
+            monitor_index=raw_frame.monitor_index,
+            left_px=raw_frame.left,
+            top_px=raw_frame.top,
         )
 
         # 2. Downscale image for model and compute dHash
@@ -127,6 +136,22 @@ class Observer:
 
         raw_fg = self.window_manager.foreground()
         fg_window = self._map_window_to_image(raw_fg, mapper) if raw_fg else None
+
+        # 6b. UIA Tree extraction and Set-of-Marks visual badges
+        ui_elements: list[UiElement] | None = None
+        fg_handle = raw_fg.handle if raw_fg else None
+        if self.settings.observation.set_of_marks:
+            ui_elements = self.uia_extractor.extract(fg_handle, mapper)
+            if ui_elements:
+                model_img = annotate_set_of_marks(model_img, ui_elements)
+                phash = compute_dhash(model_img)
+
+        # 6c. OCR extraction
+        ocr_spans: list[OcrSpan] | None = None
+        if self.settings.observation.ocr_always:
+            buf = io.BytesIO()
+            orig_img.save(buf, format="PNG")
+            ocr_spans = self.ocr_provider.recognize(buf.getvalue())
 
         # 7. Persist screenshots if run_store and run_id provided
         path_orig = ""
@@ -179,6 +204,8 @@ class Observer:
             windows=windows,
             cursor=cursor_pt,
             last_result=last_result,
+            ocr=ocr_spans,
+            ui_elements=ui_elements,
         )
 
     def capture_zoom(

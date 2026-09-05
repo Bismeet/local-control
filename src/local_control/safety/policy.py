@@ -113,6 +113,8 @@ def classify(
     # B-01: Coordinates bounds check
     if (
         isinstance(action, (ClickAction, MoveMouseAction, ScrollAction))
+        and action.x is not None
+        and action.y is not None
         and obs
         and obs.image
         and obs.image.model_width

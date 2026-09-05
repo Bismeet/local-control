@@ -140,19 +140,82 @@ python -m local_control version
 
 ---
 
-## Testing
+## CLI Usage Reference
+
+### Running the Agent
+```powershell
+# Run the agent autonomously with human approvals (assisted mode, default)
+python -m local_control run "Find all receipts in Downloads and organize into a Receipts folder"
+
+# Run in step-by-step confirmation mode
+python -m local_control run "Draft quarterly report in Notepad" --mode step
+
+# Run in trusted mode (auto-approves pre-classified safe actions)
+python -m local_control run "Run test suite and check logs" --mode trusted
+```
+
+### Control Center Web Interface
+Launch the real-time Control Center web UI with live screen feed, audit log, and approval prompts:
+```powershell
+python -m local_control serve --host 127.0.0.1 --port 8000
+```
+Navigate to `http://127.0.0.1:8000` in any browser.
+
+### Memory & Persistent Hints
+Store learned tips, application behaviors, and preferences:
+```powershell
+# Remember an app-specific hint or shortcut
+python -m local_control remember "Save shortcut in Notepad is Ctrl+S" --app notepad --key save_shortcut
+
+# Store a user preference
+python -m local_control remember "Default documents directory is D:\Work\Docs" --key doc_dir
+```
+
+### Reusable Parameterized Workflows
+Record, inspect, and replay workflows through the safety and approval pipeline:
+```powershell
+# List saved workflows
+python -m local_control workflows list
+
+# Inspect a workflow's parameterized steps
+python -m local_control workflows show organize_downloads
+
+# Replay a workflow with parameter overrides
+python -m local_control workflows run organize_downloads --param downloads_dir="D:\Downloads" --mode assisted
+```
+
+### Inspection & Diagnostics
+```powershell
+# Inspect current screen, visible windows, and cursor position
+python -m local_control observe
+
+# Validate policy classification and safety tier for an action
+python -m local_control policy explain '{"type": "click", "target_description": "Save", "expected_outcome": "Saved", "x": 100, "y": 200}'
+
+# System readiness check (DPI awareness, display topology, SendInput, hotkey, antivirus, UIA, OCR)
+python -m local_control doctor
+```
+
+---
+
+## Testing & Benchmarks
 
 The project uses `pytest` with separated test markers:
 
-- `unit`: Pure logic (schemas, parsing, coordinate math, policy rules, run store). Runs without an active desktop.
-- `integration`: Simulated agent loop using `FakeModelProvider` and virtual desktop fixtures.
-- `desktop`: Real Windows screen capture and UI control (requires an interactive Windows session).
+- `unit`: Pure logic (schemas, parsing, coordinate math, policy rules, memory store, sanitizer, input backends).
+- `integration`: Agent loop, planner hint injection, workflow replay, verification ladder, and recovery.
+- `desktop`: Real Windows screen capture, multi-monitor topologies, UIA extraction, and Set-of-Marks targeting.
 - `browser`: Playwright DOM automation tests.
-- `e2e`: Full task scenarios driven by vision LLMs.
+- `e2e`: Full task scenarios.
 
-Run unit and integration tests (safe for headless CI):
+Run all unit and integration tests:
 ```powershell
 pytest -m "unit or integration"
+```
+
+Run small-target targeting accuracy benchmark:
+```powershell
+python tests/desktop/benchmark_small_targets.py
 ```
 
 Run linting and type checking:
@@ -164,8 +227,19 @@ mypy src/local_control
 
 ---
 
-## Current Implementation Phase
+## Current Status: Phase 11 Complete
 
-> **Phase 0 - Foundation**: Complete.
+> **All Phases (0 through 11) are fully implemented and verified:**
 >
-> Established core contracts (Pydantic v2), the complete 33-action vocabulary, EventBus, RunStore, CoordinateMapper, configuration management, logging, audit logging, and CLI diagnostic skeleton. No live OS interaction or LLM calls are implemented in this phase.
+> - **Phase 0:** Core foundation (Pydantic v2 schemas, Action union, EventBus, RunStore, CoordinateMapper, Settings).
+> - **Phase 1:** DPI awareness, screen capture via `mss`, `WindowManager`, perceptual dHash, and heuristics.
+> - **Phase 2:** Keyboard and mouse input injection, `KillSwitch` global hotkey and mouse corner failsafe.
+> - **Phase 3:** Agent execution loop, OpenAI-compatible vision provider, budget enforcement, and audit logs.
+> - **Phase 4:** Structured planning, multi-step `Plan`, JSON repair, and stuck loop detector.
+> - **Phase 5:** 3-tier deterministic safety engine (`SAFE`, `CONFIRM`, `BLOCKED`), CLI approval gate, path/command policy rules.
+> - **Phase 6:** Deterministic action verification, visual dHash comparison, `zoom_region` resolution, and recovery ladder.
+> - **Phase 7:** Filesystem tools (`fs_*`), protected path sandboxing, and terminal tool (`shell_run`) with environment sanitization.
+> - **Phase 8:** Playwright browser automation, ref-based DOM targeting, snapshot extraction, and tab management.
+> - **Phase 9:** Local Control Center (FastAPI + WebSockets), live screen streaming, approval cards, and web emergency stop.
+> - **Phase 10:** SQLite memory store, learned hint injection, secret sanitizer, parameterization, and workflow replay.
+> - **Phase 11:** Windows `SendInput` backend, multi-monitor virtual screen coordinates, UIA accessibility extraction, Set-of-Marks visual badges & `ref` targeting, RapidOCR adapter, and extended `doctor` diagnostics.

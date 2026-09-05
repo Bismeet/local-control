@@ -8,7 +8,7 @@ from typing import Any
 from local_control.config.settings import Settings
 from local_control.core.actions import Action
 from local_control.core.coordinates import CoordinateMapper
-from local_control.core.types import ActionResult, Observation
+from local_control.core.types import ActionResult, Observation, UiElement
 from local_control.safety.kill_switch import StopToken
 
 
@@ -21,6 +21,7 @@ class ExecutionContext:
     mapper: CoordinateMapper | None = None
     settings: Settings | None = None
     workdir: Path | None = None
+    ui_elements: list[UiElement] | None = None
 
 
 class Tool(ABC):

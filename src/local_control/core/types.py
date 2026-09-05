@@ -52,6 +52,8 @@ class ScreenGeometry(BaseModel):
     height_px: int = Field(..., gt=0)
     scale_factor: float = Field(..., gt=0.0)
     monitor_index: int = 0
+    left_px: int = 0
+    top_px: int = 0
 
 
 class ImageRef(BaseModel):

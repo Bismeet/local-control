@@ -303,3 +303,14 @@ class FakeInputBackend:
 
     def release_all(self) -> None:
         self.calls.append(("release_all", {}))
+
+
+from local_control.execution.tools.sendinput_backend import SendInputBackend  # noqa: E402
+
+__all__ = [
+    "FakeInputBackend",
+    "InputBackend",
+    "PyAutoGuiBackend",
+    "SendInputBackend",
+    "normalize_key",
+]

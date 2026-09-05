@@ -3,6 +3,7 @@
 import ctypes
 import os
 from dataclasses import dataclass
+from typing import Any
 
 import mss
 import structlog
@@ -82,6 +83,8 @@ class RawFrame:
     height: int
     raw_bytes: bytes
     monitor_index: int = 0
+    left: int = 0
+    top: int = 0
 
 
 class ScreenCapture:
@@ -90,8 +93,30 @@ class ScreenCapture:
     def __init__(self) -> None:
         init_dpi_awareness()
 
+    def list_monitors(self) -> list[dict[str, Any]]:
+        """List all active physical and virtual monitors."""
+        try:
+            with mss.MSS() as sct:
+                results = []
+                for idx, m in enumerate(sct.monitors):
+                    results.append(
+                        {
+                            "index": idx,
+                            "left": m["left"],
+                            "top": m["top"],
+                            "width": m["width"],
+                            "height": m["height"],
+                            "is_all": idx == 0,
+                            "is_primary": idx == 1 if len(sct.monitors) > 1 else idx == 0,
+                        }
+                    )
+                return results
+        except Exception as e:
+            logger.warning("screen.list_monitors_failed", error=str(e))
+            return []
+
     def capture(self, monitor_index: int = 0) -> RawFrame:
-        """Capture the screen of the primary monitor in physical pixels.
+        """Capture the screen of the primary or specified monitor in physical pixels.
 
         In mss, monitor 0 is all monitors combined, and monitor 1 is the primary physical monitor.
         """
@@ -127,6 +152,8 @@ class ScreenCapture:
                     height=shot.height,
                     raw_bytes=raw_data,
                     monitor_index=monitor_index,
+                    left=mon.get("left", 0),
+                    top=mon.get("top", 0),
                 )
         except Exception as e:
             if isinstance(e, ExecutionError):

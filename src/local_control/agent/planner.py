@@ -158,6 +158,20 @@ class Planner:
             if obs.browser.snapshot:
                 prompt_lines.append(f"- Accessibility Snapshot:\n{obs.browser.snapshot}")
 
+        if obs.ui_elements:
+            prompt_lines.append("# Interactive UI Elements (Set-of-Marks)")
+            for el in obs.ui_elements[:30]:
+                prompt_lines.append(
+                    f"- [{el.ref}] {el.role} '{el.name}' at ({el.bbox.x}, {el.bbox.y}, {el.bbox.width}x{el.bbox.height})"
+                )
+            prompt_lines.append("")
+
+        if obs.ocr:
+            prompt_lines.append("# Detected Text (OCR)")
+            for span in obs.ocr[:30]:
+                prompt_lines.append(f"- '{span.text}' at ({span.bbox.x}, {span.bbox.y})")
+            prompt_lines.append("")
+
         prompt_lines.append(
             "\nPropose the next typed action in valid JSON conforming to PlannerResponse."
         )
