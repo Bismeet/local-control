@@ -131,6 +131,11 @@ def create_app(
     @app.get("/api/status")
     async def get_status(_: str = Depends(verify_token)) -> dict[str, Any]:
         """Return server status, active run ID, and pending interactions."""
+        # Ensure active_run_id is synchronized with active_run_task
+        if app.state.active_run_id:
+            if not app.state.active_run_task or app.state.active_run_task.done():
+                app.state.active_run_id = None
+
         pending_approval = None
         pending_question = None
         if hasattr(app.state.gate, "get_pending_approval"):
@@ -179,13 +184,12 @@ def create_app(
             else:
                 raise HTTPException(status_code=400, detail="A run is already currently active")
 
-        rid = req.run_id or f"run-{int(time.time())}"
-        app.state.active_run_id = rid
-
         # Clear stop token if previously set
         if app.state.stop_token.is_set():
-            app.state.stop_token.event.clear()
-            app.state.stop_token._reason = None
+            app.state.stop_token.clear()
+
+        rid = req.run_id or f"run-{int(time.time())}"
+        app.state.active_run_id = rid
 
         async def _run_worker():
             app.state.preview_publisher.start()
@@ -195,6 +199,8 @@ def create_app(
                     autonomy_mode=req.autonomy_mode,
                     run_id=rid,
                 )
+            except asyncio.CancelledError:
+                logger.info("control_center.runner_task_cancelled", run_id=rid)
             except Exception as e:
                 logger.error("control_center.runner_task_error", error=str(e), exc_info=True)
                 if app.state.event_bus:

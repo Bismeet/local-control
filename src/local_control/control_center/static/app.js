@@ -364,8 +364,12 @@
                     displayQuestion(data.pending_question);
                 }
             } else {
+                currentRunId = null;
                 updateStatus('IDLE');
                 activeRunIdEl.innerText = 'No active run';
+                cardApproval.classList.add('hidden');
+                cardQuestion.classList.add('hidden');
+                updatePlan(null);
             }
         } catch (err) {
             console.error('Status sync failed', err);
