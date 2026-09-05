@@ -1,6 +1,6 @@
 """Typed action vocabulary for local-control."""
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
@@ -144,6 +144,53 @@ class CloseWindowAction(ActionBase):
     type: Literal["close_window"] = "close_window"
     handle: int
     settle_ms: int = 600
+
+
+class AppTarget(BaseModel):
+    """Semantic target specification for launching or focusing an application."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    type: Literal["application"] = "application"
+    name: str = Field(..., description="Common or formal name of the application, e.g. 'Discord'")
+    process_name: str | None = Field(
+        default=None, alias="processName", description="Process executable name, e.g. 'Discord.exe'"
+    )
+    window_title_pattern: str | None = Field(
+        default=None, alias="windowTitlePattern", description="Regex or pattern for window title"
+    )
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Resolution confidence score")
+    strategy: str | None = Field(
+        default=None, description="Resolution strategy used, e.g. 'running_window', 'executable'"
+    )
+
+
+class OpenApplicationAction(ActionBase):
+    """Open or focus an application by semantic target identity."""
+
+    type: Literal["open_application"] = "open_application"
+    target: AppTarget
+    settle_ms: int = 1000
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_target(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            tgt = data.get("target")
+            if isinstance(tgt, str):
+                data["target"] = {"name": tgt}
+            name = ""
+            if isinstance(tgt, dict):
+                name = tgt.get("name", "application")
+            elif isinstance(tgt, str):
+                name = tgt
+            else:
+                name = "application"
+            if not data.get("target_description"):
+                data["target_description"] = f"Open {name}"
+            if not data.get("expected_outcome"):
+                data["expected_outcome"] = f"{name} is the foreground window"
+        return data
 
 
 # --- Observation & Wait Actions ---
@@ -384,6 +431,7 @@ Action = Annotated[
     | FocusWindowAction
     | ListWindowsAction
     | CloseWindowAction
+    | OpenApplicationAction
     | WaitAction
     | ZoomRegionAction
     | OcrRegionAction

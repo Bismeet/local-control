@@ -485,13 +485,19 @@ class SendInputBackend:
                 logger.warning("sendinput.unknown_key_down", key=key)
                 return
 
+        flags = 0
+        extended_vks = {0x5B, 0x5C, 0x5D, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E, 0x6F}
+        if vk in extended_vks:
+            flags |= KEYEVENTF_EXTENDEDKEY
+
+        scan = self._user32.MapVirtualKeyW(vk, 0) if self._user32 else 0
         inp = INPUT(
             type=INPUT_KEYBOARD,
             u=_INPUT_UNION(
                 ki=KEYBDINPUT(
                     wVk=vk,
-                    wScan=0,
-                    dwFlags=0,
+                    wScan=scan,
+                    dwFlags=flags,
                     time=0,
                     dwExtraInfo=0,
                 )
@@ -511,13 +517,19 @@ class SendInputBackend:
                 logger.warning("sendinput.unknown_key_up", key=key)
                 return
 
+        flags = KEYEVENTF_KEYUP
+        extended_vks = {0x5B, 0x5C, 0x5D, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E, 0x6F}
+        if vk in extended_vks:
+            flags |= KEYEVENTF_EXTENDEDKEY
+
+        scan = self._user32.MapVirtualKeyW(vk, 0) if self._user32 else 0
         inp = INPUT(
             type=INPUT_KEYBOARD,
             u=_INPUT_UNION(
                 ki=KEYBDINPUT(
                     wVk=vk,
-                    wScan=0,
-                    dwFlags=KEYEVENTF_KEYUP,
+                    wScan=scan,
+                    dwFlags=flags,
                     time=0,
                     dwExtraInfo=0,
                 )
@@ -529,18 +541,22 @@ class SendInputBackend:
     def press_key(self, key: str) -> None:
         """Press and immediately release a single key."""
         self.key_down(key)
-        time.sleep(0.02)
+        time.sleep(0.04)
         self.key_up(key)
+        if normalize_key(key).lower() in ("win", "super", "cmd"):
+            time.sleep(0.2)
 
     def press_keys(self, keys: list[str]) -> None:
         """Press key combination sequence down in order, then release in reverse order."""
         for k in keys:
             self.key_down(k)
-            time.sleep(0.01)
-        time.sleep(0.03)
+            time.sleep(0.02)
+        time.sleep(0.05)
         for k in reversed(keys):
             self.key_up(k)
-            time.sleep(0.01)
+            time.sleep(0.02)
+        if any(normalize_key(k).lower() in ("win", "super", "cmd") for k in keys):
+            time.sleep(0.2)
 
     def release_all(self) -> None:
         """Release all currently held keys and mouse buttons."""
