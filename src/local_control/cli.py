@@ -182,6 +182,100 @@ def act(
 
 
 @app.command()
+def run(
+    goal: str = typer.Argument(..., help="High-level goal for the agent to achieve"),
+    mode: str = typer.Option("step", help="Autonomy mode (step mode requires per-action approval)"),
+) -> None:
+    """Run the agent loop autonomously towards a goal in step mode."""
+    if is_running_elevated():
+        console.print(
+            "[bold red]Refusing to execute: local-control must not run with Administrator privileges for safety.[/bold red]"
+        )
+        raise typer.Exit(code=1)
+
+    import asyncio
+
+    from local_control.agent.planner import Planner
+    from local_control.agent.runner import AgentRunner
+    from local_control.execution.executor import Executor
+    from local_control.execution.tools.input_tool import InputTool
+    from local_control.execution.tools.wait_tool import WaitTool
+    from local_control.execution.tools.window_tool import WindowTool
+    from local_control.models.registry import build as build_model
+    from local_control.safety.approval import CliApprovalGate
+
+    init_dpi_awareness()
+    settings = Settings.load()
+
+    provider = build_model("planner", settings)
+    planner = Planner(provider=provider)
+    executor = Executor(tools=[InputTool(), WindowTool(), WaitTool()])
+    observer = Observer(settings=settings)
+    gate = CliApprovalGate(console=console)
+
+    runner = AgentRunner(
+        planner=planner,
+        executor=executor,
+        observer=observer,
+        approval_gate=gate,
+        settings=settings,
+    )
+
+    console.print(f"[bold cyan]Starting autonomous run towards goal:[/bold cyan] {goal}")
+    result = asyncio.run(runner.run(goal=goal, autonomy_mode=mode))
+
+    color = "green" if result.status == "COMPLETED" else "red"
+    console.print(
+        f"\n[bold {color}]Run finished: {result.status} after {result.steps_count} steps[/bold {color}]"
+    )
+    console.print(f"Run ID: [cyan]{result.run_id}[/cyan]")
+
+
+@app.command()
+def replay(
+    run_id: str = typer.Argument(..., help="Run ID or path to run directory to inspect/replay"),
+) -> None:
+    """Inspect and replay recorded events and state from a previous agent run."""
+    from local_control.core.run_store import RunStore
+
+    store = RunStore()
+    try:
+        _meta, _task_state, events = store.load_run(run_id)
+    except Exception as e:
+        console.print(f"[bold red]Failed to load run '{run_id}':[/bold red] {e}")
+        raise typer.Exit(code=1) from e
+
+    console.print(
+        Panel.fit(
+            f"[bold blue]Run Replay: {run_id}[/bold blue]",
+            subtitle=f"{len(events)} Recorded Events",
+        )
+    )
+
+    table = Table(show_header=True)
+    table.add_column("Step", style="cyan", width=6)
+    table.add_column("Type", style="magenta")
+    table.add_column("Details", style="green")
+
+    for ev in events:
+        step_str = str(ev.step_index) if ev.step_index is not None else "-"
+        details = ""
+        if ev.type == "action_started":
+            details = f"Action: {ev.payload.get('action_type')}"
+        elif ev.type == "action_finished":
+            success = ev.payload.get("result", {}).get("success")
+            details = f"Success: {success}"
+        elif ev.type == "step_completed":
+            act_info = ev.payload.get("planner_response", {}).get("action", {}).get("type", "")
+            details = f"Executed: {act_info}"
+        else:
+            details = str(ev.payload)[:60]
+        table.add_row(step_str, ev.type, details)
+
+    console.print(table)
+
+
+@app.command()
 def doctor() -> None:
     """Inspect environment readiness, configuration, and observation self-tests."""
     console.print(

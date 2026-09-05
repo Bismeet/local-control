@@ -58,3 +58,7 @@ class RunStoreError(LocalControlError):
 
 class AuditError(LocalControlError):
     """Raised when an audit record cannot be written synchronously."""
+
+
+class ProviderError(LocalControlError):
+    """Raised when an LLM provider request fails."""
