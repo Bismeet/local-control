@@ -56,13 +56,16 @@
                 <div class="card-body">
                     <p id="approval-summary" class="alert-summary">Action description</p>
                     <div class="approval-meta">
-                        <div><strong>Action Type:</strong> <code id="approval-action-type"></code></div>
-                        <div><strong>Reason:</strong> <span id="approval-reasons"></span></div>
+                        <div><strong>Target:</strong> <span id="approval-target">N/A</span></div>
+                        <div><strong>Action / Command:</strong> <code id="approval-action-type"></code> <code id="approval-command"></code></div>
+                        <div><strong>Why needed:</strong> <span id="approval-reasons"></span></div>
+                        <div><strong>Reversibility:</strong> <span id="approval-reversibility">Requires user confirmation</span></div>
                     </div>
                     <div class="approval-actions">
                         <button id="btn-approve" class="btn btn-success">✓ Approve</button>
                         <button id="btn-approve-run" class="btn btn-secondary">✓ Approve for Run</button>
                         <button id="btn-deny" class="btn btn-danger">✗ Deny</button>
+                        <button id="btn-approval-stop" class="btn btn-danger">⏹ Stop</button>
                     </div>
                 </div>
             </div>

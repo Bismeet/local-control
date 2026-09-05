@@ -14,6 +14,7 @@ from local_control.core.actions import (
     FocusWindowAction,
     ListWindowsAction,
     MoveMouseAction,
+    OpenApplicationAction,
     PressKeysAction,
     ScrollAction,
     TypeTextAction,
@@ -562,6 +563,21 @@ def classify(
             [f"Focus window handle {action.handle}"],
             True,
             f"Focus window (handle {action.handle})",
+        )
+
+    # S-08: open_application (safe app launching and targeting)
+    if isinstance(action, OpenApplicationAction) or act_type == "open_application":
+        app_name = (
+            action.target.name
+            if hasattr(action, "target") and hasattr(action.target, "name")
+            else str(getattr(action, "target", "application"))
+        )
+        return (
+            "SAFE",
+            "S-08",
+            [f"Safe application open/focus action for '{app_name}'"],
+            True,
+            f"Open application: {app_name}",
         )
 
     # S-04: fs_list, fs_stat, fs_read (<= 5MB) in allowed_root

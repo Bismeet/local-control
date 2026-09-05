@@ -12,9 +12,19 @@ from local_control.agent.budget import Budget
 from local_control.agent.planner import Planner
 from local_control.agent.recovery import RecoveryPolicy
 from local_control.agent.stuck_detector import StuckDetector
-from local_control.agent.verifier import Verifier, verify_done_proposal
+from local_control.agent.verifier import (
+    Verifier,
+    check_deterministic_postcondition,
+    verify_done_proposal,
+)
 from local_control.config.settings import Settings
-from local_control.core.actions import Action, AskUserAction, DoneAction, FailAction, Rect
+from local_control.core.actions import (
+    Action,
+    AskUserAction,
+    DoneAction,
+    FailAction,
+    Rect,
+)
 from local_control.core.coordinates import CoordinateMapper
 from local_control.core.events import Event, EventBus
 from local_control.core.run_store import RunStore
@@ -34,7 +44,11 @@ from local_control.execution.tools.base import ExecutionContext
 from local_control.memory.store import MemoryStore
 from local_control.observation.observer import Observer
 from local_control.safety.approval import ApprovalGate, CliApprovalGate
-from local_control.safety.kill_switch import KillSwitch, StopToken
+from local_control.safety.kill_switch import (
+    KillSwitch,
+    StopToken,
+    get_default_stop_file_path,
+)
 from local_control.safety.validator import SafetyValidator
 
 logger = structlog.get_logger(__name__)
@@ -152,6 +166,14 @@ class AgentRunner:
         self.recovery_policy.reset()
         self.stuck_detector.reset()
 
+        # Reset stop token on fresh run if no physical stop file exists
+        stop_file = getattr(self.kill_switch, "stop_file_path", None) or get_default_stop_file_path()
+        try:
+            if not stop_file.exists() and self.stop_token.is_set():
+                self.stop_token.clear()
+        except Exception:
+            pass
+
         logger.info("agent_runner.run_started", run_id=rid, goal=goal, mode=autonomy_mode)
         self._write_audit(
             run_dir,
@@ -263,6 +285,13 @@ class AgentRunner:
 
                     if verif_result.outcome == "success":
                         self.stuck_detector.record_progress()
+                        if state.plan and state.plan.steps:
+                            cur_idx = state.plan.current_index
+                            if 0 <= cur_idx < len(state.plan.steps):
+                                state.plan.steps[cur_idx].status = "done"
+                                if cur_idx + 1 < len(state.plan.steps):
+                                    state.plan.current_index = cur_idx + 1
+                                    state.plan.steps[cur_idx + 1].status = "active"
 
                     # Track planner proposal confidence
                     self.recovery_policy.record_proposal_confidence(plan_resp.confidence)
@@ -477,6 +506,30 @@ class AgentRunner:
                 # Record action to stuck detector
                 self.stuck_detector.record_action(action)
 
+                # Emit target_resolved event if action is open_application
+                if action.type == "open_application" and hasattr(action, "target"):
+                    tgt = action.target
+                    tgt_dict = (
+                        tgt.model_dump(mode="json")
+                        if hasattr(tgt, "model_dump")
+                        else {"name": str(tgt)}
+                    )
+                    logger.info(
+                        "agent_runner.target_resolved",
+                        name=tgt_dict.get("name"),
+                        process=tgt_dict.get("process_name") or tgt_dict.get("processName"),
+                        confidence=tgt_dict.get("confidence", 1.0),
+                    )
+                    if self.event_bus:
+                        await self.event_bus.publish(
+                            Event(
+                                run_id=rid,
+                                step_index=state.current_step,
+                                type="target_resolved",
+                                payload=tgt_dict,
+                            )
+                        )
+
                 # 7. SafetyValidator Gate
                 verdict = self.validator.validate(
                     action=action,
@@ -598,13 +651,13 @@ class AgentRunner:
                     ui_elements=obs.ui_elements,
                 )
 
-                if self.event_bus:
+                if self.event_bus and self.executor.event_bus is None:
                     await self.event_bus.publish(
                         Event(
                             run_id=rid,
                             step_index=state.current_step,
                             type="action_started",
-                            payload={"action": action.model_dump(mode="json")},
+                            payload={"action": action.model_dump(mode="json"), "action_type": action.type},
                         )
                     )
 
@@ -617,7 +670,7 @@ class AgentRunner:
                 last_action = action
                 last_result = result
 
-                if self.event_bus:
+                if self.event_bus and self.executor.event_bus is None:
                     await self.event_bus.publish(
                         Event(
                             run_id=rid,
@@ -625,6 +678,7 @@ class AgentRunner:
                             type="action_finished",
                             payload={
                                 "action": action.model_dump(mode="json"),
+                                "action_type": action.type,
                                 "result": result.model_dump(mode="json"),
                             },
                         )
@@ -641,7 +695,67 @@ class AgentRunner:
                         step_index=state.current_step,
                     )
 
-                # 9. Record Step
+                # 9. Immediate Post-Action Verification & Plan Advancement
+                post_passed, post_evidence = check_deterministic_postcondition(
+                    action=action,
+                    result=result,
+                    obs_before=obs,
+                    obs_after=None,
+                )
+                if post_passed is True:
+                    if state.plan and state.plan.steps:
+                        cur_idx = state.plan.current_index
+                        if 0 <= cur_idx < len(state.plan.steps):
+                            state.plan.steps[cur_idx].status = "done"
+                            if cur_idx + 1 < len(state.plan.steps):
+                                state.plan.current_index = cur_idx + 1
+                                state.plan.steps[cur_idx + 1].status = "active"
+
+                    if self.event_bus:
+                        await self.event_bus.publish(
+                            Event(
+                                run_id=rid,
+                                step_index=state.current_step,
+                                type="verification_result",
+                                payload={
+                                    "outcome": "success",
+                                    "source": ["deterministic"],
+                                    "evidence": post_evidence or "Immediate deterministic postcondition passed",
+                                },
+                            )
+                        )
+
+                    # For open_application, check if goal is completed
+                    if action.type == "open_application":
+                        all_done = False
+                        if state.plan and state.plan.steps:
+                            remaining = [s for s in state.plan.steps if s.status not in ("done", "skipped")]
+                            if not remaining:
+                                all_done = True
+                        else:
+                            all_done = True
+
+                        if all_done:
+                            state.status = "COMPLETED"
+                            self._record_step(
+                                state=state,
+                                obs=obs,
+                                plan_resp=plan_resp,
+                                result=result,
+                                approved=True,
+                                verdict=verdict,
+                                approval=approval_dec,
+                            )
+                            state.current_step += 1
+                            self.run_store.write_state(rid, state)
+                            app_name = getattr(getattr(action, "target", None), "name", getattr(action, "target", "Application"))
+                            logger.info(
+                                "agent_runner.goal_completed",
+                                summary=f"Application {app_name} successfully opened and verified in foreground.",
+                            )
+                            break
+
+                # 10. Record Step
                 self._record_step(
                     state=state,
                     obs=obs,

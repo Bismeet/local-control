@@ -152,12 +152,18 @@ class AppTarget(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     type: Literal["application"] = "application"
-    name: str = Field(..., description="Common or formal name of the application, e.g. 'Discord'")
+    name: str = Field(..., min_length=1, description="Common or formal name of the application, e.g. 'Discord'")
     process_name: str | None = Field(
         default=None, alias="processName", description="Process executable name, e.g. 'Discord.exe'"
     )
     window_title_pattern: str | None = Field(
         default=None, alias="windowTitlePattern", description="Regex or pattern for window title"
+    )
+    protocol: str | None = Field(
+        default=None, description="Protocol URI for launching, e.g. 'discord://', 'spotify:'"
+    )
+    coordinates: tuple[int, int] | None = Field(
+        default=None, description="Optional fallback coordinates"
     )
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Resolution confidence score")
     strategy: str | None = Field(

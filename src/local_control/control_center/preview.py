@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import time
 from typing import Any
@@ -59,6 +60,10 @@ class PreviewPublisher:
         if self._task and not self._task.done():
             self._task.cancel()
         self._task = None
+        if self._sct:
+            with contextlib.suppress(Exception):
+                self._sct.close()
+            self._sct = None
         logger.info("preview_publisher.stopped")
 
     async def _capture_loop(self) -> None:
@@ -93,28 +98,32 @@ class PreviewPublisher:
                 break
 
     def _capture_and_encode(self) -> bytes:
-        """Capture screen and encode as JPEG quality 60."""
+        """Capture screen and encode as JPEG quality 60 using fast bilinear scaling."""
         try:
             import mss
 
-            cls = getattr(mss, "MSS", None) or mss.mss
-            with cls() as sct:
-                # Primary monitor is monitors[1]
-                mon = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
-                shot = sct.grab(mon)
-                img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-                # Downscale to model max width 1280 to save network bandwidth
-                if img.width > 1280:
-                    ratio = 1280.0 / img.width
-                    img = img.resize(
-                        (1280, int(img.height * ratio)),
-                        resample=Image.Resampling.LANCZOS,
-                    )
+            if not hasattr(self, "_sct") or self._sct is None:
+                cls = getattr(mss, "MSS", None) or mss.mss
+                self._sct = cls()
 
-                buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=self.quality)
-                return buf.getvalue()
+            sct = self._sct
+            # Primary monitor is monitors[1]
+            mon = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+            shot = sct.grab(mon)
+            img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+            # Downscale to model max width 1280 to save network bandwidth
+            if img.width > 1280:
+                ratio = 1280.0 / img.width
+                img = img.resize(
+                    (1280, int(img.height * ratio)),
+                    resample=Image.Resampling.BILINEAR,
+                )
+
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=self.quality)
+            return buf.getvalue()
         except Exception:
+            self._sct = None
             return self._create_placeholder_frame("Screen capture unavailable")
 
     def _create_placeholder_frame(self, message: str) -> bytes:

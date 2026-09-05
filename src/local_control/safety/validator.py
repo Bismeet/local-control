@@ -56,8 +56,8 @@ class SafetyValidator:
             settings=self.settings,
         )
 
-        # 2. Check C-14: Low confidence (< 0.4) elevates SAFE to CONFIRM
-        if tier == "SAFE" and confidence is not None and confidence < 0.4:
+        # 2. Check C-14: Low confidence (< 0.4) elevates SAFE to CONFIRM (exempt harmless app launch)
+        if tier == "SAFE" and category not in ("S-08",) and confidence is not None and confidence < 0.4:
             tier = "CONFIRM"
             category = "C-14"
             reasons = [f"Planner confidence {confidence:.2f} is below 0.40"]

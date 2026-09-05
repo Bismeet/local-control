@@ -20,6 +20,7 @@ from local_control.core.types import (
     TaskState,
 )
 from local_control.execution.executor import Executor
+from local_control.execution.tools.app_tool import AppTool
 from local_control.execution.tools.filesystem_tool import FilesystemTool
 from local_control.execution.tools.input_tool import InputTool
 from local_control.execution.tools.observation_tool import ObservationTool
@@ -274,6 +275,7 @@ class WorkflowReplayer:
             tools=[
                 InputTool(),
                 WindowTool(),
+                AppTool(),
                 WaitTool(),
                 ObservationTool(),
                 FilesystemTool(),

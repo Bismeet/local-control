@@ -14,11 +14,15 @@
     const cardApproval = document.getElementById('card-approval');
     const approvalCategory = document.getElementById('approval-category');
     const approvalSummary = document.getElementById('approval-summary');
+    const approvalTarget = document.getElementById('approval-target');
     const approvalActionType = document.getElementById('approval-action-type');
+    const approvalCommand = document.getElementById('approval-command');
     const approvalReasons = document.getElementById('approval-reasons');
+    const approvalReversibility = document.getElementById('approval-reversibility');
     const btnApprove = document.getElementById('btn-approve');
     const btnApproveRun = document.getElementById('btn-approve-run');
     const btnDeny = document.getElementById('btn-deny');
+    const btnApprovalStop = document.getElementById('btn-approval-stop');
 
     const cardQuestion = document.getElementById('card-question');
     const questionText = document.getElementById('question-text');
@@ -112,7 +116,42 @@
         approvalCategory.innerText = payload.category || 'CONFIRM';
         approvalSummary.innerText = payload.human_summary || 'Confirmation required';
         approvalActionType.innerText = payload.action?.type || '';
-        approvalReasons.innerText = (payload.verdict?.reasons || []).join(', ');
+
+        let targetText = 'N/A';
+        if (payload.action) {
+            if (payload.action.target && typeof payload.action.target === 'object') {
+                targetText = payload.action.target.name || payload.action.target.process_name || 'N/A';
+            } else if (payload.action.target) {
+                targetText = String(payload.action.target);
+            } else if (payload.action.path) {
+                targetText = payload.action.path;
+            } else if (payload.action.url) {
+                targetText = payload.action.url;
+            } else if (payload.action.title) {
+                targetText = payload.action.title;
+            } else if (payload.action.target_description) {
+                targetText = payload.action.target_description;
+            } else if (payload.action.command) {
+                targetText = payload.action.command;
+            }
+        }
+        if (approvalTarget) approvalTarget.innerText = targetText;
+
+        let cmdText = '';
+        if (payload.action) {
+            if (payload.action.command) cmdText = payload.action.command;
+            else if (payload.action.text) cmdText = `"${payload.action.text}"`;
+            else if (payload.action.keys) cmdText = JSON.stringify(payload.action.keys);
+            else if (payload.action.path) cmdText = payload.action.path;
+        }
+        if (approvalCommand) approvalCommand.innerText = cmdText;
+
+        const isDangerous = payload.category === 'C-08' || payload.category === 'C-05' || payload.tier === 'BLOCK';
+        if (approvalReversibility) {
+            approvalReversibility.innerText = isDangerous ? 'Irreversible / Dangerous (Requires Explicit Confirmation)' : 'Standard confirmation needed';
+        }
+
+        approvalReasons.innerText = (payload.verdict?.reasons || payload.reasons || []).join(', ');
         cardApproval.classList.remove('hidden');
         updateStatus('WAITING_APPROVAL');
     }
@@ -167,36 +206,64 @@
             currentRunId = event.run_id;
             activeRunIdEl.innerText = currentRunId;
             updateStatus('RUNNING');
-            logMessage(`Run started: ${payload.goal || ''}`, 'action');
+            logMessage(`[RUN START] Goal: ${payload.goal || ''} (${payload.mode || 'assisted'} mode)`, 'action');
         } else if (type === 'step_started') {
-            logMessage(`Step ${event.step_index || 0} started`, 'info');
+            logMessage(`[STEP START] Step ${event.step_index !== undefined ? event.step_index : 0}`, 'info');
+        } else if (type === 'target_resolved') {
+            const tgtName = payload.name || payload.process_name || 'application';
+            const proc = payload.process_name ? ` (Process: ${payload.process_name})` : '';
+            const conf = payload.confidence !== undefined ? ` [Confidence: ${Math.round(payload.confidence * 100)}%]` : '';
+            logMessage(`[TARGET RESOLVED] ${tgtName}${proc}${conf}`, 'info');
         } else if (type === 'planner_proposal') {
             if (payload.plan) {
                 updatePlan(payload.plan);
+                logMessage(`[PLAN] Revision ${payload.plan.revision || 0} with ${payload.plan.steps?.length || 0} steps`, 'info');
             }
             if (payload.action) {
-                logMessage(`Planner proposed: ${payload.action.type} — ${payload.action.target_description || ''}`, 'action');
+                const desc = payload.action.target_description || payload.action.type;
+                logMessage(`[ACTION PROPOSED] ${payload.action.type}: ${desc}`, 'action');
             }
         } else if (type === 'verdict') {
-            logMessage(`Verdict: ${payload.tier} [${payload.category}] -> ${payload.decision}`, 'verdict');
+            if (payload.decision === 'allow') {
+                logMessage(`[APPROVAL: AUTO-APPROVED] Tier: ${payload.tier} [${payload.category || 'SAFE'}] -> Allowed`, 'success');
+            } else {
+                logMessage(`[VERDICT] Tier: ${payload.tier} [${payload.category}] -> ${payload.decision}`, 'verdict');
+            }
         } else if (type === 'approval_requested') {
             displayApproval(payload);
-            logMessage(`APPROVAL REQUIRED: ${payload.human_summary}`, 'verdict');
+            logMessage(`[APPROVAL REQUIRED] ${payload.human_summary || 'Human confirmation required'}`, 'verdict');
         } else if (type === 'user_input_requested') {
             displayQuestion(payload);
-            logMessage(`USER INPUT REQUIRED: ${payload.question}`, 'verdict');
+            logMessage(`[USER INPUT REQUIRED] ${payload.question}`, 'verdict');
         } else if (type === 'action_started') {
-            logMessage(`Executing: ${payload.action_type || ''}...`, 'action');
+            const actType = payload.action_type || payload.action?.type || '';
+            const tgt = payload.action?.target?.name || payload.action?.target || payload.action?.command || '';
+            logMessage(`[EXECUTION] ${actType}${tgt ? ' -> ' + tgt : ''}...`, 'action');
+        } else if (type === 'verification_result') {
+            if (payload.outcome === 'success') {
+                logMessage(`[VERIFICATION] Passed: ${payload.evidence || 'Deterministic postcondition verified'}`, 'success');
+                logMessage(`[STEP SUCCESS] Step completed successfully`, 'success');
+            } else {
+                logMessage(`[VERIFICATION] Failed: ${payload.evidence || payload.outcome}`, 'error');
+            }
         } else if (type === 'action_finished') {
             cardApproval.classList.add('hidden');
             const res = payload.result || {};
-            const status = res.success ? 'Success' : `Failed (${res.error?.code || 'error'})`;
-            logMessage(`Action result: ${res.action_type} -> ${status} (${res.duration_ms || 0}ms)`, res.success ? 'success' : 'error');
+            if (res.success) {
+                logMessage(`[ACTION FINISHED] ${res.action_type || ''} completed in ${res.duration_ms || 0}ms`, 'success');
+            } else {
+                const errMsg = res.error?.message || res.error?.code || 'execution error';
+                logMessage(`[ACTION FAILED] ${res.action_type || ''}: ${errMsg}`, 'error');
+            }
         } else if (type === 'run_finished') {
             updateStatus(payload.status || 'FINISHED');
             cardApproval.classList.add('hidden');
             cardQuestion.classList.add('hidden');
-            logMessage(`Run finished with status: ${payload.status}`, payload.status === 'COMPLETED' ? 'success' : 'error');
+            if (payload.status === 'COMPLETED') {
+                logMessage(`[RUN COMPLETED] Goal reached successfully!`, 'success');
+            } else {
+                logMessage(`[RUN FINISHED] Status: ${payload.status} (${payload.reason || ''})`, 'error');
+            }
             loadRunsHistory();
         }
     }
@@ -281,6 +348,9 @@
     btnApprove.addEventListener('click', () => sendApproval('approved'));
     btnApproveRun.addEventListener('click', () => sendApproval('approved_for_run'));
     btnDeny.addEventListener('click', () => sendApproval('denied'));
+    if (btnApprovalStop) {
+        btnApprovalStop.addEventListener('click', () => btnStop.click());
+    }
 
     btnSubmitAnswer.addEventListener('click', async () => {
         const answer = answerInput.value.trim();

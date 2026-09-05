@@ -197,3 +197,43 @@ def test_inspect_script_detection(tmp_path) -> None:
     tier_cmd, cat_cmd, _, _ = classify_command(f"powershell {bad_script}", cwd=tmp_path)
     assert tier_cmd == "BLOCKED"
     assert cat_cmd == "B-07"
+
+
+def test_powershell_wrapped_safe_commands() -> None:
+    safe_wrapped = [
+        "powershell -Command \"Start-Process 'chrome.exe'\"",
+        "powershell -Command \"Start-Process chrome.exe\"",
+        "powershell -c \"Start-Process 'notepad.exe'\"",
+        "powershell -NoProfile -Command \"Start-Process 'calc.exe'\"",
+        "cmd /c \"start chrome.exe\"",
+        "powershell -Command \"dir\"",
+        "powershell -Command \"Get-Process\"",
+    ]
+    for cmd in safe_wrapped:
+        tier, cat, reasons, grantable = classify_command(cmd)
+        assert tier == "SAFE", f"Expected SAFE for '{cmd}', got {tier} ({cat}: {reasons})"
+        assert cat == "S-06"
+        assert grantable is True
+
+
+def test_powershell_wrapped_dangerous_commands_still_blocked_or_confirmed() -> None:
+    # B-07 deletion wrapped in powershell
+    tier, cat, _, _ = classify_command("powershell -Command \"Remove-Item C:\\Temp -Recurse -Force\"")
+    assert tier == "BLOCKED"
+    assert cat == "B-07"
+
+    # B-08 system altering elevation wrapped in powershell
+    tier, cat, _, _ = classify_command("powershell -Command \"Start-Process powershell -Verb RunAs\"")
+    assert tier == "BLOCKED"
+    assert cat == "B-08"
+
+    # C-06 git push wrapped in powershell
+    tier, cat, _, _ = classify_command("powershell -Command \"git push origin main\"")
+    assert tier == "CONFIRM"
+    assert cat == "C-06"
+
+    # Script execution via Start-Process should require confirmation (C-05)
+    tier, cat, _, _ = classify_command("powershell -Command \"Start-Process script.bat\"")
+    assert tier == "CONFIRM"
+    assert cat == "C-05"
+

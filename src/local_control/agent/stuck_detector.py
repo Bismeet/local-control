@@ -90,10 +90,3 @@ class StuckDetector:
             )
 
         return False, ""
-
-    def reset(self) -> None:
-        """Fully reset the detector state."""
-        self.action_repeat_count = 0
-        self.unchanged_screen_count = 0
-        self.last_action_repr = None
-        self.last_phash = None

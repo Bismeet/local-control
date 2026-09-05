@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import contextlib
+import re
+
 import structlog
 
-from local_control.core.actions import Action, DoneAction, FocusWindowAction
+from local_control.core.actions import (
+    Action,
+    DoneAction,
+    FocusWindowAction,
+    OpenApplicationAction,
+)
 from local_control.core.types import (
     ActionResult,
     Assessment,
@@ -31,6 +39,7 @@ NON_GUI_ACTIONS = {
     "focus_window",
     "close_window",
     "wait",
+    "open_application",
 }
 
 
@@ -67,14 +76,31 @@ def check_deterministic_postcondition(
             f"Foreground window handle {obs_after.foreground.handle} does not match target {action.handle}",
         )
 
-    # 3. shell_run postcondition: exit code 0
+    # 3. open_application postcondition: foreground window matches target application
+    if (action.type == "open_application" or isinstance(action, OpenApplicationAction)) and obs_after and obs_after.foreground:
+        target = getattr(action, "target", None)
+        tgt_name = getattr(target, "name", str(target or ""))
+        tgt_proc = getattr(target, "process_name", "") or ""
+        tgt_pattern = getattr(target, "window_title_pattern", "") or ""
+        tgt_proc_clean = tgt_proc.lower().replace(".exe", "")
+        fg_title = (obs_after.foreground.title or "").lower()
+        fg_proc = (obs_after.foreground.process_name or "").lower().replace(".exe", "")
+        pattern_matches = False
+        if tgt_pattern:
+            with contextlib.suppress(re.error):
+                pattern_matches = bool(re.search(tgt_pattern, obs_after.foreground.title or "", re.IGNORECASE))
+        if (tgt_name.lower() in fg_title) or (tgt_proc_clean and tgt_proc_clean in fg_proc) or pattern_matches:
+            return True, f"Foreground window '{obs_after.foreground.title}' matches target {tgt_name}"
+        return False, f"Foreground window '{obs_after.foreground.title}' does not match target {tgt_name}"
+
+    # 4. shell_run postcondition: exit code 0
     if action.type == "shell_run" and "exit_code" in result.data:
         exit_code = result.data["exit_code"]
         if exit_code == 0:
             return True, "Shell command exited with code 0"
         return False, f"Shell command failed with exit code {exit_code}"
 
-    # 4. wait postcondition: completed cleanly
+    # 5. wait postcondition: completed cleanly
     if action.type == "wait" and result.success:
         return True, f"Wait completed successfully for {getattr(action, 'seconds', 0)} seconds"
 

@@ -159,6 +159,7 @@ def act(
             settings=Settings.load(),
         )
 
+        from local_control.execution.tools.app_tool import AppTool
         from local_control.execution.tools.browser_tool import BrowserTool
         from local_control.execution.tools.filesystem_tool import FilesystemTool
         from local_control.execution.tools.observation_tool import ObservationTool
@@ -168,6 +169,7 @@ def act(
             tools=[
                 InputTool(),
                 WindowTool(),
+                AppTool(),
                 WaitTool(),
                 ObservationTool(),
                 FilesystemTool(),
@@ -209,6 +211,7 @@ def run(
     from local_control.agent.planner import Planner
     from local_control.agent.runner import AgentRunner
     from local_control.execution.executor import Executor
+    from local_control.execution.tools.app_tool import AppTool
     from local_control.execution.tools.browser_tool import BrowserTool
     from local_control.execution.tools.filesystem_tool import FilesystemTool
     from local_control.execution.tools.input_tool import InputTool
@@ -228,6 +231,7 @@ def run(
         tools=[
             InputTool(),
             WindowTool(),
+            AppTool(),
             WaitTool(),
             ObservationTool(),
             FilesystemTool(),
@@ -333,6 +337,7 @@ def serve(
     from local_control.core.events import EventBus
     from local_control.core.run_store import RunStore
     from local_control.execution.executor import Executor
+    from local_control.execution.tools.app_tool import AppTool
     from local_control.execution.tools.browser_tool import BrowserTool
     from local_control.execution.tools.filesystem_tool import FilesystemTool
     from local_control.execution.tools.input_tool import InputTool
@@ -359,6 +364,7 @@ def serve(
         tools=[
             InputTool(),
             WindowTool(),
+            AppTool(),
             WaitTool(),
             ObservationTool(),
             FilesystemTool(),

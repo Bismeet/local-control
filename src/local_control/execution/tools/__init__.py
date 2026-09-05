@@ -1,3 +1,4 @@
+from local_control.execution.tools.app_tool import AppTool
 from local_control.execution.tools.base import ExecutionContext, Tool
 from local_control.execution.tools.browser_tool import BrowserTool
 from local_control.execution.tools.filesystem_tool import FilesystemTool
@@ -14,6 +15,7 @@ from local_control.execution.tools.wait_tool import WaitTool
 from local_control.execution.tools.window_tool import WindowTool
 
 __all__ = [
+    "AppTool",
     "BrowserTool",
     "ExecutionContext",
     "FakeInputBackend",

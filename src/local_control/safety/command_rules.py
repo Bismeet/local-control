@@ -178,6 +178,32 @@ def split_statements(command: str) -> list[str]:
     return statements or [command.strip()]
 
 
+def unwrap_shell_statement(statement: str) -> str:
+    """Unwrap outer powershell/pwsh/cmd invocations to inspect the inner command."""
+    s = statement.strip()
+    # Match powershell / pwsh with optional common flags and -Command / -c
+    ps_match = re.match(
+        r"^(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)\s+(?:-(?:noprofile|noninteractive|sta|mta|windowstyle\s+\w+|executionpolicy\s+\w+)\s+)*(?:-(?:c(?:ommand)?)\s+)?(.*)$",
+        s,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if ps_match:
+        inner = ps_match.group(1).strip()
+        if (inner.startswith('"') and inner.endswith('"')) or (inner.startswith("'") and inner.endswith("'")):
+            inner = inner[1:-1].strip()
+        return inner
+
+    # Match cmd /c or /k
+    cmd_match = re.match(r"^(?:cmd(?:\.exe)?)\s+(?:/[cqk])\s+(.*)$", s, re.IGNORECASE | re.DOTALL)
+    if cmd_match:
+        inner = cmd_match.group(1).strip()
+        if (inner.startswith('"') and inner.endswith('"')) or (inner.startswith("'") and inner.endswith("'")):
+            inner = inner[1:-1].strip()
+        return inner
+
+    return s
+
+
 def classify_single_statement(statement: str) -> CommandClassification:
     """Classify a single PowerShell statement against B, C, and S rules."""
     norm = statement.strip()
@@ -232,41 +258,47 @@ def classify_single_statement(statement: str) -> CommandClassification:
         if re.search(pat, norm, re.IGNORECASE):
             return "CONFIRM", "C-18", ["External messaging via shell requires confirmation"], False
 
-    # 9. Check S-06 Read-only Allowlist
-    is_safe = False
-    norm_lower = norm.lower()
+    # 9. Check S-06 Read-only Allowlist & Safe Launchers
+    SAFE_APP_LAUNCHERS = {"start-process", "start", "explorer", "explorer.exe"}
 
-    # S-06 must NOT contain forbidden operators
-    has_forbidden = any(op in norm_lower for op in S06_FORBIDDEN_OPERATORS)
+    candidates = [norm]
+    unwrapped = unwrap_shell_statement(norm)
+    if unwrapped and unwrapped != norm:
+        candidates.append(unwrapped)
 
-    if not has_forbidden:
-        tokens = norm_lower.split()
-        if tokens:
-            cmd0 = tokens[0]
-            if cmd0 in S06_ALLOWED_COMMANDS:
-                if cmd0 == "get-process" and ("-id" in tokens or "-name" in tokens):
-                    is_safe = False
-                else:
-                    is_safe = True
-            elif len(tokens) >= 2:
-                cmd_two = f"{tokens[0]} {tokens[1]}"
-                if (
-                    cmd_two in S06_ALLOWED_COMMANDS
-                    or tokens[0] == "git"
-                    and tokens[1] in {"status", "log", "diff", "remote"}
-                ):
-                    is_safe = True
-                elif (
-                    tokens[0] == "git"
-                    and tokens[1] == "branch"
-                    and "-d" not in tokens
-                    and "-D" not in tokens
-                ):
-                    # git branch is safe unless -d or -D
-                    is_safe = True
-
-    if is_safe:
-        return "SAFE", "S-06", ["Command matches read-only allowlist"], True
+    for cand in candidates:
+        cand_lower = cand.lower()
+        has_forbidden = any(op in cand_lower for op in S06_FORBIDDEN_OPERATORS)
+        if not has_forbidden:
+            tokens = cand_lower.split()
+            if tokens:
+                cmd0 = tokens[0]
+                if cmd0 in SAFE_APP_LAUNCHERS:
+                    # Safe application or directory opening (non-elevated, non-script)
+                    unsafe_tokens = ("-verb", "runas", ".msi", ".bat", ".cmd", ".ps1", ".vbs", ".reg", ".sh", ".iso", ".vhd")
+                    if not any(bad in t for t in tokens for bad in unsafe_tokens):
+                        return "SAFE", "S-06", ["Command matches safe app launcher allowlist"], True
+                elif cmd0 in S06_ALLOWED_COMMANDS:
+                    if cmd0 == "get-process" and ("-id" in tokens or "-name" in tokens):
+                        pass
+                    else:
+                        return "SAFE", "S-06", ["Command matches read-only allowlist"], True
+                elif len(tokens) >= 2:
+                    cmd_two = f"{tokens[0]} {tokens[1]}"
+                    if (
+                        cmd_two in S06_ALLOWED_COMMANDS
+                        or tokens[0] == "git"
+                        and tokens[1] in {"status", "log", "diff", "remote"}
+                    ):
+                        return "SAFE", "S-06", ["Command matches read-only allowlist"], True
+                    elif (
+                        tokens[0] == "git"
+                        and tokens[1] == "branch"
+                        and "-d" not in tokens
+                        and "-D" not in tokens
+                    ):
+                        # git branch is safe unless -d or -D
+                        return "SAFE", "S-06", ["Command matches read-only allowlist"], True
 
     # 10. Default: C-05
     tokens = norm.split()

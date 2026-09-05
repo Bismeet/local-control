@@ -58,18 +58,17 @@ class OpenAiCompatProvider(ModelProvider):
                 for part in msg.parts:
                     if isinstance(part, TextPart):
                         content_items.append({"type": "text", "text": part.text})
-                    elif isinstance(part, ImagePart):
-                        if self.supports_vision:
-                            b64 = base64.b64encode(part.png_bytes).decode("ascii")
-                            content_items.append(
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:image/png;base64,{b64}",
-                                        "detail": part.detail,
-                                    },
-                                }
-                            )
+                    elif isinstance(part, ImagePart) and self.supports_vision:
+                        b64 = base64.b64encode(part.png_bytes).decode("ascii")
+                        content_items.append(
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{b64}",
+                                    "detail": part.detail,
+                                },
+                            }
+                        )
                 if len(content_items) == 1 and content_items[0].get("type") == "text":
                     messages.append({"role": msg.role, "content": content_items[0]["text"]})
                 else:
