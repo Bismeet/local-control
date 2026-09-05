@@ -65,6 +65,9 @@ ignore = [
     "E501", # line length handled by formatter
 ]
 
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
+
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true

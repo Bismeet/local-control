@@ -31,6 +31,7 @@ from local_control.core.types import (
 )
 from local_control.execution.executor import Executor
 from local_control.execution.tools.base import ExecutionContext
+from local_control.memory.store import MemoryStore
 from local_control.observation.observer import Observer
 from local_control.safety.approval import ApprovalGate, CliApprovalGate
 from local_control.safety.kill_switch import KillSwitch, StopToken
@@ -69,6 +70,7 @@ class AgentRunner:
         verifier: Verifier | None = None,
         recovery_policy: RecoveryPolicy | None = None,
         stuck_detector: StuckDetector | None = None,
+        memory_store: MemoryStore | None = None,
     ) -> None:
         self.planner = planner
         self.executor = executor
@@ -89,6 +91,7 @@ class AgentRunner:
         self.recovery_policy = recovery_policy or RecoveryPolicy(
             max_retries_per_step=self.settings.verify.max_retries_per_step
         )
+        self.memory_store = memory_store
 
     def _write_audit(
         self,
@@ -214,8 +217,22 @@ class AgentRunner:
                         obs = obs.model_copy(update={"browser": b_obs})
 
                 # 4. Propose Next Action
+                hints: list[Any] = []
+                if self.memory_store is not None:
+                    try:
+                        active_app = (
+                            obs.foreground.process_name
+                            if obs.foreground and obs.foreground.process_name
+                            else None
+                        )
+                        hints = self.memory_store.search_hints(
+                            query=state.goal, app=active_app, limit=5
+                        )
+                    except Exception as e:
+                        logger.warning("agent_runner.memory_hint_lookup_failed", error=str(e))
+
                 try:
-                    plan_resp = await self.planner.propose(state=state, obs=obs)
+                    plan_resp = await self.planner.propose(state=state, obs=obs, hints=hints)
                 except Exception as e:
                     state.status = "FAILED_PROVIDER"
                     logger.error("agent_runner.planner_failed", error=str(e))
@@ -646,6 +663,17 @@ class AgentRunner:
             {"status": state.status, "steps": state.current_step},
             step_index=state.current_step,
         )
+
+        if self.memory_store is not None:
+            try:
+                self.memory_store.index_run(
+                    run_id=rid,
+                    goal=state.goal,
+                    status=state.status,
+                    step_count=state.current_step,
+                )
+            except Exception as e:
+                logger.warning("agent_runner.memory_index_failed", error=str(e))
 
         if self.event_bus:
             await self.event_bus.publish(

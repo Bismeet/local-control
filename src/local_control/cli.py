@@ -573,5 +573,153 @@ def policy_explain(
     )
 
 
+@app.command()
+def remember(
+    text: str = typer.Argument(..., help="Hint, fact, or preference to remember"),
+    app_name: str = typer.Option("*", "--app", "-a", help="Target application or '*' for global"),
+    key: str = typer.Option("", "--key", "-k", help="Hint key or label"),
+    tag: str = typer.Option("", "--tag", "-t", help="Alternative tag/app selector"),
+) -> None:
+    """Store a hint or preference in persistent memory."""
+    from local_control.memory.store import MemoryStore
+
+    target_app = tag or app_name or "*"
+    target_key = key
+    val = text.strip()
+
+    if not target_key:
+        if ":" in val:
+            target_key, val = [p.strip() for p in val.split(":", 1)]
+        elif "=" in val:
+            target_key, val = [p.strip() for p in val.split("=", 1)]
+        else:
+            target_key = "general"
+
+    store = MemoryStore()
+    hint_id = store.add_hint(app=target_app, key=target_key, value=val)
+    console.print(
+        f"[bold green]Remembered hint #{hint_id}:[/bold green] "
+        f"[{target_app}] [bold cyan]{target_key}[/bold cyan]: {val}"
+    )
+
+
+workflows_app = typer.Typer(help="Reusable workflow management and execution")
+app.add_typer(workflows_app, name="workflows")
+
+
+@workflows_app.command("list")
+def workflows_list() -> None:
+    """List all saved workflow templates."""
+    from local_control.memory.store import MemoryStore
+
+    store = MemoryStore()
+    wfs = store.list_workflows()
+    if not wfs:
+        console.print("[yellow]No workflows found in memory.[/yellow]")
+        return
+
+    table = Table(title="Saved Workflows")
+    table.add_column("Name", style="bold cyan")
+    table.add_column("Description")
+    table.add_column("Goal Template", style="dim")
+    table.add_column("Parameters")
+    table.add_column("Success Count", justify="right", style="green")
+
+    for wf in wfs:
+        params_str = ", ".join(wf.get_params().keys()) or "none"
+        table.add_row(wf.name, wf.description, wf.goal_template, params_str, str(wf.success_count))
+    console.print(table)
+
+
+@workflows_app.command("show")
+def workflows_show(
+    name: str = typer.Argument(..., help="Workflow name"),
+) -> None:
+    """Inspect a saved workflow's template and steps."""
+    from local_control.memory.store import MemoryStore
+
+    store = MemoryStore()
+    wf = store.get_workflow(name)
+    if not wf:
+        console.print(f"[bold red]Workflow '{name}' not found.[/bold red]")
+        raise typer.Exit(code=1)
+
+    steps_list = wf.get_steps()
+    steps_formatted = "\n".join(
+        f"  {idx + 1}. {s.get('type', 'unknown')}: {s.get('target_description', '')}"
+        for idx, s in enumerate(steps_list)
+    )
+
+    console.print(
+        Panel(
+            f"[bold]Name:[/bold] {wf.name}\n"
+            f"[bold]Description:[/bold] {wf.description}\n"
+            f"[bold]Goal Template:[/bold] {wf.goal_template}\n"
+            f"[bold]Success Count:[/bold] {wf.success_count}\n"
+            f"[bold]Parameters:[/bold] {wf.params_json}\n\n"
+            f"[bold]Recorded Steps ({len(steps_list)}):[/bold]\n{steps_formatted}",
+            title=f"Workflow: {wf.name}",
+        )
+    )
+
+
+@workflows_app.command("run")
+def workflows_run(
+    name: str = typer.Argument(..., help="Workflow name to replay"),
+    params: list[str] = typer.Option(
+        [], "--param", "-p", help="Parameter substitution formatted as KEY=VALUE"
+    ),
+    mode: str = typer.Option(
+        "assisted", "--mode", "-m", help="Autonomy mode: assisted or autonomous"
+    ),
+) -> None:
+    """Replay a workflow through the standard safety and approval pipeline."""
+    import asyncio
+
+    from local_control.memory.store import MemoryStore
+    from local_control.memory.workflows import WorkflowReplayer
+
+    param_dict: dict[str, str] = {}
+    for p in params:
+        if "=" in p:
+            k, v = p.split("=", 1)
+            param_dict[k.strip()] = v.strip()
+
+    store = MemoryStore()
+    replayer = WorkflowReplayer(store=store)
+
+    try:
+        wf, goal, actions, plan = replayer.prepare_replay(name, param_dict)
+    except Exception as e:
+        console.print(f"[bold red]Failed to prepare workflow '{name}':[/bold red] {e}")
+        raise typer.Exit(code=1) from e
+
+    console.print(
+        Panel(
+            f"[bold]Workflow:[/bold] {wf.name}\n"
+            f"[bold]Rendered Goal:[/bold] {goal}\n"
+            f"[bold]Parameters:[/bold] {param_dict}\n"
+            f"[bold]Steps to Replay:[/bold] {len(actions)}",
+            title="Starting Workflow Replay",
+            border_style="green",
+        )
+    )
+
+    res = asyncio.run(
+        replayer.run(
+            name=name,
+            params=param_dict,
+            autonomy_mode=mode,
+        )
+    )
+
+    status_color = "green" if res.status == "COMPLETED" else "red"
+    console.print(
+        f"Workflow execution finished with status: [{status_color}]{res.status}[/{status_color}]"
+    )
+    if res.status != "COMPLETED":
+        raise typer.Exit(code=1)
+
+
 if __name__ == "__main__":
     app()

@@ -57,6 +57,7 @@ class Planner:
         error_feedback: str | None = None,
         png_bytes: bytes | None = None,
         replan_reason: str | None = None,
+        hints: list[Any] | None = None,
     ) -> ModelRequest:
         """Construct the prompt messages, system instructions, and schema for the model."""
         prompt_lines: list[str] = [
@@ -97,7 +98,27 @@ class Planner:
                 prompt_lines.append(f"- RETRY ERROR: {error_feedback}")
             prompt_lines.append("")
 
-        # 3. Current observation summary
+        # 5. Known hints from memory (capped at ~500 tokens / 2000 chars)
+        if hints:
+            hint_lines = ["# Known Hints"]
+            char_count = 0
+            MAX_HINT_CHARS = 2000
+            for h in hints:
+                if hasattr(h, "format_prompt_line"):
+                    line = h.format_prompt_line()
+                elif isinstance(h, str):
+                    line = f"- {h}"
+                else:
+                    line = f"- {getattr(h, 'key', '')}: {getattr(h, 'value', '')}"
+                if char_count + len(line) + 1 > MAX_HINT_CHARS:
+                    break
+                hint_lines.append(line)
+                char_count += len(line) + 1
+            if len(hint_lines) > 1:
+                prompt_lines.extend(hint_lines)
+                prompt_lines.append("")
+
+        # 6. Current observation summary
         prompt_lines.append("# Current Desktop State")
         prompt_lines.append(
             f"- Screen: {obs.screen.width_px}x{obs.screen.height_px} (Scale: {obs.screen.scale_factor})"
@@ -181,6 +202,7 @@ class Planner:
         obs: Observation,
         png_bytes: bytes | None = None,
         replan_reason: str | None = None,
+        hints: list[Any] | None = None,
     ) -> PlannerResponse:
         """Call model and return validated PlannerResponse with up to 2 retries."""
         max_attempts = 3
@@ -193,6 +215,7 @@ class Planner:
                 error_feedback=error_feedback,
                 png_bytes=png_bytes,
                 replan_reason=replan_reason,
+                hints=hints,
             )
 
             response = await self.provider.complete(req)
