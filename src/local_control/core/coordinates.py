@@ -2,7 +2,7 @@
 
 from local_control.core.actions import Point
 from local_control.core.errors import CoordinateMappingError
-from local_control.core.types import ImageRef, ScreenGeometry
+from local_control.core.types import ImageRef, Rect, ScreenGeometry
 
 
 class CoordinateMapper:
@@ -55,4 +55,20 @@ class CoordinateMapper:
         clamped_x = max(0, min(raw_x, self.image.model_width - 1))
         clamped_y = max(0, min(raw_y, self.image.model_height - 1))
 
+        return Point(x=clamped_x, y=clamped_y)
+
+    def from_zoom(self, point: Point, zoom_rect: Rect) -> Point:
+        """Map a Point from zoom crop coordinates back to physical screen coordinates."""
+        screen_x = self.origin_x + zoom_rect.x + point.x
+        screen_y = self.origin_y + zoom_rect.y + point.y
+        clamped_x = max(self.origin_x, min(screen_x, self.origin_x + self.screen.width_px - 1))
+        clamped_y = max(self.origin_y, min(screen_y, self.origin_y + self.screen.height_px - 1))
+        return Point(x=clamped_x, y=clamped_y)
+
+    def to_zoom(self, point: Point, zoom_rect: Rect) -> Point:
+        """Map a physical screen Point into relative zoom crop coordinates."""
+        rel_x = point.x - (self.origin_x + zoom_rect.x)
+        rel_y = point.y - (self.origin_y + zoom_rect.y)
+        clamped_x = max(0, min(rel_x, zoom_rect.width - 1))
+        clamped_y = max(0, min(rel_y, zoom_rect.height - 1))
         return Point(x=clamped_x, y=clamped_y)

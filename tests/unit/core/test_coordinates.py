@@ -139,3 +139,31 @@ def test_coordinate_invertibility(scale: float) -> None:
         inv = mapper.to_image(scr)
         assert abs(inv.x - orig_pt.x) <= 1
         assert abs(inv.y - orig_pt.y) <= 1
+
+
+@pytest.mark.unit
+def test_from_zoom_and_to_zoom() -> None:
+    """Verify zoom crop coordinate mapping to and from screen pixels."""
+    from local_control.core.types import Rect
+
+    screen = ScreenGeometry(width_px=1920, height_px=1080, scale_factor=1.0)
+    image = ImageRef(
+        path_original="orig.png",
+        path_model="model.png",
+        model_width=1280,
+        model_height=720,
+        phash="abc",
+    )
+    mapper = CoordinateMapper(screen, image)
+    zoom_rect = Rect(x=300, y=200, width=400, height=300)
+
+    # Point at (50, 50) within the zoom crop -> physical screen (350, 250)
+    zoom_pt = Point(x=50, y=50)
+    screen_pt = mapper.from_zoom(zoom_pt, zoom_rect)
+    assert screen_pt.x == 350
+    assert screen_pt.y == 250
+
+    # Invert back to zoom crop
+    back_to_zoom = mapper.to_zoom(screen_pt, zoom_rect)
+    assert back_to_zoom.x == 50
+    assert back_to_zoom.y == 50

@@ -62,6 +62,8 @@ class ImageRef(BaseModel):
     model_width: int = Field(..., gt=0)
     model_height: int = Field(..., gt=0)
     phash: str
+    path_zoom: str | None = None
+    zoom_rect: Rect | None = None
 
 
 ScreenState = Literal[

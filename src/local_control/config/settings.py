@@ -118,6 +118,14 @@ class MemorySettings(BaseModel):
     db_path: str = ""
 
 
+class VerificationSettings(BaseModel):
+    """Verification and recovery configuration."""
+
+    phash_threshold: int = Field(default=6, ge=0)
+    max_retries_per_step: int = Field(default=2, ge=1)
+    stuck_threshold: int = Field(default=3, ge=1)
+
+
 class Settings(BaseSettings):
     """Root configuration object loaded with precedence."""
 
@@ -130,6 +138,7 @@ class Settings(BaseSettings):
     models: ModelsSettings = Field(default_factory=ModelsSettings)
     observation: ObservationSettings = Field(default_factory=ObservationSettings)
     safety: SafetySettings = Field(default_factory=SafetySettings)
+    verify: VerificationSettings = Field(default_factory=VerificationSettings)
     budget: BudgetSettings = Field(default_factory=BudgetSettings)
     execution: ExecutionSettings = Field(default_factory=ExecutionSettings)
     terminal: TerminalSettings = Field(default_factory=TerminalSettings)

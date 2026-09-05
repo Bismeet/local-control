@@ -129,6 +129,8 @@ class FakeComputer:
             last_result: ActionResult | None = None,
             step_index: int = 0,
             run_id: str | None = None,
+            zoom_rect: Any = None,
+            **kwargs: Any,
         ) -> Observation:
             return Observation(
                 step_index=step_index,

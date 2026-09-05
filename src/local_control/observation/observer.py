@@ -2,6 +2,7 @@
 
 import os
 from datetime import UTC, datetime
+from pathlib import Path
 
 from PIL import Image
 
@@ -70,6 +71,7 @@ class Observer:
         last_result: ActionResult | None = None,
         step_index: int = 0,
         run_id: str | None = None,
+        zoom_rect: Rect | None = None,
     ) -> Observation:
         """Capture the screen and desktop state and build a typed Observation."""
         captured_at = datetime.now(UTC)
@@ -129,6 +131,7 @@ class Observer:
         # 7. Persist screenshots if run_store and run_id provided
         path_orig = ""
         path_model = ""
+        path_zoom: str | None = None
         if self.run_store and run_id:
             run_dir = self.run_store.get_run_dir(run_id)
             screenshots_dir = run_dir / "screenshots"
@@ -143,12 +146,27 @@ class Observer:
             path_orig = str(orig_file.relative_to(run_dir))
             path_model = str(model_file.relative_to(run_dir))
 
+            if zoom_rect:
+                box = (
+                    max(0, zoom_rect.x),
+                    max(0, zoom_rect.y),
+                    min(orig_img.width, zoom_rect.x + zoom_rect.width),
+                    min(orig_img.height, zoom_rect.y + zoom_rect.height),
+                )
+                if box[2] > box[0] and box[3] > box[1]:
+                    zoom_crop = orig_img.crop(box)
+                    zoom_file = screenshots_dir / f"{step_index:04d}.zoom.png"
+                    zoom_crop.save(zoom_file, format="PNG")
+                    path_zoom = str(zoom_file.relative_to(run_dir))
+
         image_ref = ImageRef(
             path_original=path_orig,
             path_model=path_model,
             model_width=model_img.width,
             model_height=model_img.height,
             phash=phash,
+            path_zoom=path_zoom,
+            zoom_rect=zoom_rect,
         )
 
         return Observation(
@@ -162,3 +180,32 @@ class Observer:
             cursor=cursor_pt,
             last_result=last_result,
         )
+
+    def capture_zoom(
+        self,
+        rect: Rect,
+        run_id: str | None = None,
+        step_index: int = 0,
+    ) -> Path | None:
+        """Capture a full-resolution crop of the screen at specified rect."""
+
+        raw_frame = self.screen_capture.capture(monitor_index=0)
+        orig_img: Image.Image = frame_to_pillow(raw_frame)
+        box = (
+            max(0, rect.x),
+            max(0, rect.y),
+            min(orig_img.width, rect.x + rect.width),
+            min(orig_img.height, rect.y + rect.height),
+        )
+        if box[2] <= box[0] or box[3] <= box[1]:
+            return None
+
+        crop = orig_img.crop(box)
+        if self.run_store and run_id:
+            run_dir = self.run_store.get_run_dir(run_id)
+            screenshots_dir = run_dir / "screenshots"
+            screenshots_dir.mkdir(parents=True, exist_ok=True)
+            zoom_file = screenshots_dir / f"{step_index:04d}.zoom.png"
+            crop.save(zoom_file, format="PNG")
+            return zoom_file
+        return None

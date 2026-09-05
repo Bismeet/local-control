@@ -36,6 +36,14 @@ class ApprovalGate(Protocol):
         """Request asynchronous approval for an action."""
         ...
 
+    def ask_user(self, question: str) -> str:
+        """Prompt user with a question and return their text response."""
+        ...
+
+    async def aask_user(self, question: str) -> str:
+        """Asynchronously prompt user with a question and return their response."""
+        ...
+
 
 class CliApprovalGate:
     """Console-based approval gate prompting the user via Rich."""
@@ -116,13 +124,27 @@ class CliApprovalGate:
         """Asynchronously prompt for approval offloading blocking input to worker thread."""
         return await asyncio.to_thread(self.request, action, verdict, screenshot_path)
 
+    def ask_user(self, question: str) -> str:
+        """Prompt user with a question and return their text response."""
+        return Prompt.ask(f"[bold cyan]User Input Required:[/bold cyan] {question}")
+
+    async def aask_user(self, question: str) -> str:
+        """Asynchronously prompt user with a question and return their response."""
+        return await asyncio.to_thread(self.ask_user, question)
+
 
 class AutoApprovalGate:
     """Approval gate that automatically approves or rejects (for testing or automation)."""
 
-    def __init__(self, approve: bool = True, approve_for_run: bool = False) -> None:
+    def __init__(
+        self,
+        approve: bool = True,
+        approve_for_run: bool = False,
+        user_answer: str = "ok",
+    ) -> None:
         self.approve = approve
         self.approve_for_run = approve_for_run
+        self.user_answer = user_answer
         self.history: list[tuple[Action, ApprovalDecision]] = []
 
     def request(
@@ -149,3 +171,9 @@ class AutoApprovalGate:
         screenshot_path: str | None = None,
     ) -> ApprovalDecision:
         return self.request(action, verdict, screenshot_path)
+
+    def ask_user(self, question: str) -> str:
+        return self.user_answer
+
+    async def aask_user(self, question: str) -> str:
+        return self.user_answer

@@ -10,8 +10,11 @@ import structlog
 
 from local_control.agent.budget import Budget
 from local_control.agent.planner import Planner
+from local_control.agent.recovery import RecoveryPolicy
+from local_control.agent.stuck_detector import StuckDetector
+from local_control.agent.verifier import Verifier, verify_done_proposal
 from local_control.config.settings import Settings
-from local_control.core.actions import DoneAction, FailAction
+from local_control.core.actions import Action, AskUserAction, DoneAction, FailAction, Rect
 from local_control.core.coordinates import CoordinateMapper
 from local_control.core.events import Event, EventBus
 from local_control.core.run_store import RunStore
@@ -63,6 +66,9 @@ class AgentRunner:
         stop_token: StopToken | None = None,
         settings: Settings | None = None,
         event_bus: EventBus | None = None,
+        verifier: Verifier | None = None,
+        recovery_policy: RecoveryPolicy | None = None,
+        stuck_detector: StuckDetector | None = None,
     ) -> None:
         self.planner = planner
         self.executor = executor
@@ -75,6 +81,14 @@ class AgentRunner:
         self.stop_token = stop_token or StopToken()
         self.kill_switch = kill_switch or KillSwitch(token=self.stop_token)
         self.event_bus = event_bus
+        self.verifier = verifier or Verifier(phash_threshold=self.settings.verify.phash_threshold)
+        self.stuck_detector = stuck_detector or StuckDetector(
+            repetition_threshold=self.settings.verify.stuck_threshold,
+            phash_threshold=self.settings.verify.phash_threshold,
+        )
+        self.recovery_policy = recovery_policy or RecoveryPolicy(
+            max_retries_per_step=self.settings.verify.max_retries_per_step
+        )
 
     def _write_audit(
         self,
@@ -151,8 +165,10 @@ class AgentRunner:
             )
 
         last_result: ActionResult | None = None
+        last_action: Action | None = None
+        last_obs: Observation | None = None
+        zoom_rect: Rect | None = None
         run_dir = self.run_store.get_run_dir(rid)
-        step_failures: dict[int, int] = {}
 
         # Start KillSwitch
         with self.kill_switch:
@@ -176,7 +192,9 @@ class AgentRunner:
                     last_result=last_result,
                     step_index=state.current_step,
                     run_id=rid,
+                    zoom_rect=zoom_rect,
                 )
+                zoom_rect = None
 
                 # 4. Propose Next Action
                 try:
@@ -186,48 +204,123 @@ class AgentRunner:
                     logger.error("agent_runner.planner_failed", error=str(e))
                     break
 
+                # 5. Verify Previous Action & Run Recovery Ladder
+                active_step_idx = state.plan.current_index if state.plan else 0
+                if last_action is not None and last_result is not None and last_obs is not None:
+                    verif_result = self.verifier.verify(
+                        action=last_action,
+                        result=last_result,
+                        obs_before=last_obs,
+                        obs_after=obs,
+                        assessment=plan_resp.assessment,
+                    )
+                    if state.steps:
+                        state.steps[-1].verification = verif_result
+
+                    # Stuck detection: record screen and check progress
+                    expects_chg = bool(getattr(last_action, "expected_outcome", ""))
+                    if last_action.type in ("click", "drag", "type_text", "press_keys"):
+                        expects_chg = True
+                    self.stuck_detector.record_screen(obs.image.phash, expects_change=expects_chg)
+                    is_stuck, stuck_reason = self.stuck_detector.check_stuck()
+
+                    if verif_result.outcome == "success":
+                        self.stuck_detector.record_progress()
+
+                    # Track planner proposal confidence
+                    self.recovery_policy.record_proposal_confidence(plan_resp.confidence)
+
+                    # Decide recovery action
+                    recovery_dec = self.recovery_policy.decide(
+                        verification=verif_result,
+                        step_index=active_step_idx,
+                        is_stuck=is_stuck,
+                        stuck_reason=stuck_reason,
+                        user_stopped=self.stop_token.is_set(),
+                    )
+
+                    # Emit verification and recovery events
+                    if self.event_bus:
+                        await self.event_bus.publish(
+                            Event(
+                                run_id=rid,
+                                step_index=state.current_step,
+                                type="verification_result",
+                                payload=verif_result.model_dump(),
+                            )
+                        )
+                        await self.event_bus.publish(
+                            Event(
+                                run_id=rid,
+                                step_index=state.current_step,
+                                type="recovery_decision",
+                                payload=recovery_dec.model_dump(),
+                            )
+                        )
+
+                    self._write_audit(
+                        run_dir,
+                        "verification",
+                        verif_result.model_dump(),
+                        step_index=state.current_step,
+                    )
+                    self._write_audit(
+                        run_dir,
+                        "recovery",
+                        recovery_dec.model_dump(),
+                        step_index=state.current_step,
+                    )
+
+                    # Act on recovery decision:
+                    if recovery_dec.kind == "abort":
+                        state.status = "ABORTED_BY_AGENT"
+                        logger.warning("agent_runner.aborted_by_recovery", hint=recovery_dec.hint)
+                        break
+
+                    if recovery_dec.kind == "ask_user":
+                        state.status = "WAITING_USER"
+                        logger.info("agent_runner.waiting_user", reason="recovery_escalation")
+                        if self.event_bus:
+                            await self.event_bus.publish(
+                                Event(
+                                    run_id=rid,
+                                    step_index=state.current_step,
+                                    type="waiting_user",
+                                    payload={"reason": recovery_dec.hint},
+                                )
+                            )
+                        prompt_msg = (
+                            recovery_dec.hint or "Agent requested human assistance to continue."
+                        )
+                        user_ans = await self.approval_gate.aask_user(prompt_msg)
+                        state.feedback_queue.append(f"User assistance provided: {user_ans}")
+                        state.status = "RUNNING"
+
+                    elif recovery_dec.kind == "replan":
+                        logger.info("agent_runner.replan_triggered", hint=recovery_dec.hint)
+                        try:
+                            plan_resp = await self.planner.propose(
+                                state=state,
+                                obs=obs,
+                                replan_reason=recovery_dec.hint,
+                            )
+                            if plan_resp.plan:
+                                state.plan = plan_resp.plan
+                        except Exception as e:
+                            state.status = "FAILED_PROVIDER"
+                            logger.error("agent_runner.replan_failed", error=str(e))
+                            break
+
+                    elif recovery_dec.kind == "retry_hint":
+                        if recovery_dec.hint:
+                            state.feedback_queue.append(recovery_dec.hint)
+
                 # Update state plan if returned
                 if plan_resp.plan:
                     state.plan = plan_resp.plan
 
                 # Clear feedback queue now that planner has processed it
                 state.feedback_queue.clear()
-
-                # Check for replan trigger: assessment failure twice on the same step
-                active_step_idx = state.plan.current_index if state.plan else 0
-                if plan_resp.assessment.previous_action_outcome == "failure":
-                    step_failures[active_step_idx] = step_failures.get(active_step_idx, 0) + 1
-                    logger.warning(
-                        "agent_runner.step_failure_recorded",
-                        step_index=active_step_idx,
-                        failures=step_failures[active_step_idx],
-                        evidence=plan_resp.assessment.evidence,
-                    )
-                    if step_failures[active_step_idx] >= 2:
-                        logger.info(
-                            "agent_runner.replan_triggered",
-                            step_index=active_step_idx,
-                            failures=step_failures[active_step_idx],
-                        )
-                        replan_reason = (
-                            f"Step {active_step_idx} failed {step_failures[active_step_idx]} times consecutively: "
-                            f"{plan_resp.assessment.evidence}"
-                        )
-                        try:
-                            plan_resp = await self.planner.propose(
-                                state=state,
-                                obs=obs,
-                                replan_reason=replan_reason,
-                            )
-                            if plan_resp.plan:
-                                state.plan = plan_resp.plan
-                            step_failures[state.plan.current_index if state.plan else 0] = 0
-                        except Exception as e:
-                            state.status = "FAILED_PROVIDER"
-                            logger.error("agent_runner.replan_failed", error=str(e))
-                            break
-                elif plan_resp.assessment.previous_action_outcome == "success":
-                    step_failures[active_step_idx] = 0
 
                 # Log active plan step
                 if (
@@ -244,9 +337,33 @@ class AgentRunner:
                         status=ps.status,
                     )
 
-                # 5. Check for terminal actions
+                # 6. Check for terminal / special actions
                 action = plan_resp.action
                 if isinstance(action, DoneAction):
+                    is_valid, reject_reason = verify_done_proposal(plan_resp, state.plan)
+                    if not is_valid:
+                        logger.warning("agent_runner.done_rejected", reason=reject_reason)
+                        state.feedback_queue.append(reject_reason)
+                        rejected_result = ActionResult(
+                            action_type="done",
+                            success=False,
+                            started_at=datetime.now(UTC),
+                            duration_ms=0,
+                            error=ErrorInfo(code="DONE_REJECTED", message=reject_reason),
+                        )
+                        self._record_step(
+                            state=state,
+                            obs=obs,
+                            plan_resp=plan_resp,
+                            result=rejected_result,
+                            approved=False,
+                        )
+                        last_obs = obs
+                        last_action = action
+                        last_result = rejected_result
+                        state.current_step += 1
+                        continue
+
                     state.status = "COMPLETED"
                     logger.info("agent_runner.goal_completed", summary=action.summary)
                     self._record_step(
@@ -282,7 +399,48 @@ class AgentRunner:
                     )
                     break
 
-                # 6. SafetyValidator Gate
+                if isinstance(action, AskUserAction):
+                    state.status = "WAITING_USER"
+                    logger.info("agent_runner.ask_user", question=action.question)
+                    if self.event_bus:
+                        await self.event_bus.publish(
+                            Event(
+                                run_id=rid,
+                                step_index=state.current_step,
+                                type="waiting_user",
+                                payload={"question": action.question},
+                            )
+                        )
+                    answer = await self.approval_gate.aask_user(action.question)
+                    state.feedback_queue.append(f"User response to '{action.question}': {answer}")
+                    state.status = "RUNNING"
+                    ask_result = ActionResult(
+                        action_type="ask_user",
+                        success=True,
+                        started_at=datetime.now(UTC),
+                        duration_ms=0,
+                        data={"question": action.question, "answer": answer},
+                    )
+                    self._record_step(
+                        state=state,
+                        obs=obs,
+                        plan_resp=plan_resp,
+                        result=ask_result,
+                        approved=True,
+                    )
+                    last_obs = obs
+                    last_action = action
+                    last_result = ask_result
+                    state.current_step += 1
+                    continue
+
+                if action.type == "zoom_region":
+                    zoom_rect = getattr(action, "rect", None)
+
+                # Record action to stuck detector
+                self.stuck_detector.record_action(action)
+
+                # 7. SafetyValidator Gate
                 verdict = self.validator.validate(
                     action=action,
                     obs=obs,
@@ -324,7 +482,6 @@ class AgentRunner:
                             message=f"Action blocked: {reasons_str}",
                         ),
                     )
-                    last_result = blocked_result
                     self._record_step(
                         state=state,
                         obs=obs,
@@ -336,6 +493,9 @@ class AgentRunner:
                             decision="denied", note="blocked_by_safety_policy"
                         ),
                     )
+                    last_obs = obs
+                    last_action = action
+                    last_result = blocked_result
                     state.current_step += 1
                     continue
 
@@ -365,7 +525,7 @@ class AgentRunner:
                         state.feedback_queue.append(
                             f"Action '{action.type}' was denied by human user."
                         )
-                        last_result = ActionResult(
+                        denied_result = ActionResult(
                             action_type=action.type,
                             success=False,
                             started_at=datetime.now(UTC),
@@ -376,18 +536,21 @@ class AgentRunner:
                             state=state,
                             obs=obs,
                             plan_resp=plan_resp,
-                            result=last_result,
+                            result=denied_result,
                             approved=False,
                             verdict=verdict,
                             approval=approval_dec,
                         )
+                        last_obs = obs
+                        last_action = action
+                        last_result = denied_result
                         state.current_step += 1
                         continue
                 else:
                     # Allow (SAFE in assisted/trusted, or granted CONFIRM in trusted)
                     approval_dec = ApprovalDecision(decision="approved", note="auto_allow")
 
-                # 7. Execute Action
+                # 8. Execute Action
                 mapper = CoordinateMapper(screen=obs.screen, image=obs.image)
                 ctx = ExecutionContext(
                     run_id=rid,
@@ -402,6 +565,8 @@ class AgentRunner:
                     ctx=ctx,
                     step_index=state.current_step,
                 )
+                last_obs = obs
+                last_action = action
                 last_result = result
 
                 if verdict.tier == "CONFIRM":
@@ -412,7 +577,7 @@ class AgentRunner:
                         step_index=state.current_step,
                     )
 
-                # 8. Record Step
+                # 9. Record Step
                 self._record_step(
                     state=state,
                     obs=obs,
