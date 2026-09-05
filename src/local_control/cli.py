@@ -301,6 +301,106 @@ def replay(
 
 
 @app.command()
+def serve(
+    host: str = typer.Option(
+        "127.0.0.1", "--host", "-h", help="Host address to bind to (must be loopback)"
+    ),
+    port: int = typer.Option(8000, "--port", "-p", help="Port to listen on"),
+    token: str | None = typer.Option(
+        None, "--token", "-t", help="Per-process authentication token"
+    ),
+    no_browser: bool = typer.Option(
+        False, "--no-browser", help="Do not open web browser on startup"
+    ),
+) -> None:
+    """Start local-control web Control Center server."""
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        console.print(
+            "[bold red]Security error: Control Center must bind only to loopback (127.0.0.1 or localhost).[/bold red]"
+        )
+        raise typer.Exit(code=1)
+
+    import secrets
+    import webbrowser
+
+    import uvicorn
+
+    from local_control.agent.planner import Planner
+    from local_control.agent.runner import AgentRunner
+    from local_control.control_center.gate import ControlCenterApprovalGate
+    from local_control.control_center.preview import PreviewPublisher
+    from local_control.control_center.server import create_app
+    from local_control.core.events import EventBus
+    from local_control.core.run_store import RunStore
+    from local_control.execution.executor import Executor
+    from local_control.execution.tools.browser_tool import BrowserTool
+    from local_control.execution.tools.filesystem_tool import FilesystemTool
+    from local_control.execution.tools.input_tool import InputTool
+    from local_control.execution.tools.observation_tool import ObservationTool
+    from local_control.execution.tools.terminal_tool import TerminalTool
+    from local_control.execution.tools.wait_tool import WaitTool
+    from local_control.execution.tools.window_tool import WindowTool
+    from local_control.models.registry import build as build_model
+    from local_control.observation.screen import init_dpi_awareness
+    from local_control.safety.kill_switch import StopToken
+
+    init_dpi_awareness()
+    auth_token = token or secrets.token_urlsafe(16)
+    settings = Settings.load()
+    event_bus = EventBus()
+    gate = ControlCenterApprovalGate(event_bus=event_bus)
+    stop_token = StopToken()
+    run_store = RunStore(base_dir=settings.logging.runs_dir or None)
+    preview = PreviewPublisher(event_bus=event_bus)
+
+    provider = build_model("planner", settings)
+    planner = Planner(provider=provider)
+    executor = Executor(
+        tools=[
+            InputTool(),
+            WindowTool(),
+            WaitTool(),
+            ObservationTool(),
+            FilesystemTool(),
+            TerminalTool(),
+            BrowserTool(),
+        ]
+    )
+    observer = Observer(settings=settings)
+
+    runner = AgentRunner(
+        planner=planner,
+        executor=executor,
+        observer=observer,
+        approval_gate=gate,
+        settings=settings,
+        event_bus=event_bus,
+        stop_token=stop_token,
+        run_store=run_store,
+    )
+
+    app_instance = create_app(
+        runner=runner,
+        run_store=run_store,
+        event_bus=event_bus,
+        gate=gate,
+        stop_token=stop_token,
+        token=auth_token,
+        preview_publisher=preview,
+        settings=settings,
+    )
+
+    url = f"http://{host}:{port}/?token={auth_token}"
+    console.print(f"[bold green]Starting local-control Control Center at:[/bold green] {url}")
+    console.print(f"[bold cyan]Token:[/bold cyan] {auth_token}")
+
+    if not no_browser:
+        webbrowser.open(url)
+
+    uvicorn.run(app_instance, host=host, port=port, log_level="info")
+
+
+@app.command()
 def doctor() -> None:
     """Inspect environment readiness, configuration, and observation self-tests."""
     console.print(

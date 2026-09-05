@@ -186,6 +186,16 @@ class AgentRunner:
                     logger.warning("agent_runner.budget_exceeded", reason=b_status.reason)
                     break
 
+                if self.event_bus:
+                    await self.event_bus.publish(
+                        Event(
+                            run_id=rid,
+                            step_index=state.current_step,
+                            type="step_started",
+                            payload={"step_index": state.current_step},
+                        )
+                    )
+
                 # 3. Observe Desktop
                 obs = await asyncio.to_thread(
                     self.observer.observe,
@@ -567,6 +577,16 @@ class AgentRunner:
                     workdir=run_dir,
                 )
 
+                if self.event_bus:
+                    await self.event_bus.publish(
+                        Event(
+                            run_id=rid,
+                            step_index=state.current_step,
+                            type="action_started",
+                            payload={"action": action.model_dump(mode="json")},
+                        )
+                    )
+
                 result = await self.executor.execute(
                     action=action,
                     ctx=ctx,
@@ -575,6 +595,19 @@ class AgentRunner:
                 last_obs = obs
                 last_action = action
                 last_result = result
+
+                if self.event_bus:
+                    await self.event_bus.publish(
+                        Event(
+                            run_id=rid,
+                            step_index=state.current_step,
+                            type="action_finished",
+                            payload={
+                                "action": action.model_dump(mode="json"),
+                                "result": result.model_dump(mode="json"),
+                            },
+                        )
+                    )
 
                 if verdict.tier == "CONFIRM":
                     self._write_audit(
@@ -660,15 +693,19 @@ class AgentRunner:
             result=result,
         )
         state.steps.append(step_rec)
-        self.run_store.append_event(
-            state.run_id,
-            Event(
-                run_id=state.run_id,
-                step_index=state.current_step,
-                type="step_completed",
-                payload=step_rec.model_dump(),
-            ),
+        ev = Event(
+            run_id=state.run_id,
+            step_index=state.current_step,
+            type="step_completed",
+            payload=step_rec.model_dump(mode="json"),
         )
+        self.run_store.append_event(state.run_id, ev)
+        if self.event_bus:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self.event_bus.publish(ev))
+            except RuntimeError:
+                pass
 
     def _generate_summary(self, state: TaskState) -> str:
         """Generate markdown summary of run."""

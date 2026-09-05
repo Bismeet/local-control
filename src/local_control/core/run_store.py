@@ -151,3 +151,19 @@ class RunStore:
                 raise RunStoreError(f"Failed to parse events.jsonl for {run_id}: {e}") from e
 
         return run_meta, task_state, events
+
+    def list_runs(self) -> list[dict[str, Any]]:
+        """List summaries of all runs in base_dir, sorted by creation date descending."""
+        if not self.base_dir.exists():
+            return []
+        runs: list[dict[str, Any]] = []
+        for p in self.base_dir.iterdir():
+            if p.is_dir() and (p / "run.json").exists():
+                try:
+                    with open(p / "run.json", encoding="utf-8") as f:
+                        meta = json.load(f)
+                    runs.append(meta)
+                except Exception:
+                    continue
+        runs.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+        return runs
