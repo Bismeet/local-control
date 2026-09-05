@@ -1,0 +1,69 @@
+# Default configuration for local-control
+
+[models.planner]
+provider = "openai_compat"
+model = "gpt-4o"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+
+[models.verifier]
+provider = "openai_compat"
+model = "gpt-4o"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+
+[models.summarizer]
+provider = "openai_compat"
+model = "gpt-4o"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+
+[observation]
+model_max_width = 1280
+ocr_always = false
+set_of_marks = false
+max_windows = 15
+
+[safety]
+autonomy_mode = "assisted"
+allowed_roots = []
+max_destructive_per_run = 50
+confirm_new_hosts = false
+confirm_browser_type = false
+allowed_unc_hosts = []
+
+[budget]
+max_steps = 30
+max_time_s = 600
+max_cost_usd = 2.0
+consecutive_failures_limit = 3
+
+[execution]
+action_timeout_s = 30
+shell_timeout_s = 120
+
+[terminal]
+shell = ""
+strip_env = [
+    "*_API_KEY",
+    "*_TOKEN",
+    "*_SECRET",
+    "*PASSWORD*",
+]
+
+[browser]
+headless = false
+channel = ""
+profile_dir = ""
+download_dir = ""
+
+[control_center]
+host = "127.0.0.1"
+port = 8000
+
+[logging]
+level = "INFO"
+runs_dir = ""
+
+[memory]
+db_path = ""

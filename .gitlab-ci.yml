@@ -1,0 +1,36 @@
+default:
+  image: python:3.11-slim
+
+stages:
+  - lint
+  - typecheck
+  - test
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  paths:
+    - .cache/pip
+    - .venv/
+
+before_script:
+  - python --version
+  - pip install --upgrade pip
+  - pip install -e ".[dev]"
+
+ruff:
+  stage: lint
+  script:
+    - ruff check .
+    - ruff format --check .
+
+mypy:
+  stage: typecheck
+  script:
+    - mypy src/local_control
+
+pytest:
+  stage: test
+  script:
+    - pytest -m "unit or integration"
