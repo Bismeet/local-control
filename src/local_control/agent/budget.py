@@ -30,6 +30,12 @@ class Budget:
         self._warned_steps = False
         self._warned_time = False
 
+    def reset(self, start_time: datetime | None = None) -> None:
+        """Reset budget tracking for a new run."""
+        self.start_time = start_time or datetime.now(UTC)
+        self._warned_steps = False
+        self._warned_time = False
+
     def check(self, state: TaskState) -> BudgetStatus:
         b_cfg = self.settings.budget
         max_steps = b_cfg.max_steps

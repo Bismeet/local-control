@@ -30,6 +30,14 @@ class RecoveryPolicy:
         self.consecutive_low_confidence: int = 0
         self.failures_after_ask: int = 0
 
+    def reset(self) -> None:
+        """Reset state tracking for a new run."""
+        self.step_failures.clear()
+        self.step_replanned.clear()
+        self.step_asked.clear()
+        self.consecutive_low_confidence = 0
+        self.failures_after_ask = 0
+
     def record_proposal_confidence(self, confidence: float) -> None:
         """Track planner confidence to trigger ask_user when low twice consecutively."""
         if confidence < self.low_confidence_threshold:

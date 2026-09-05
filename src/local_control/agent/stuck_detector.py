@@ -25,6 +25,13 @@ class StuckDetector:
         self.last_phash: str | None = None
         self.unchanged_screen_count: int = 0
 
+    def reset(self) -> None:
+        """Reset state tracking for a new run."""
+        self.last_action_repr = None
+        self.action_repeat_count = 0
+        self.last_phash = None
+        self.unchanged_screen_count = 0
+
     def _serialize_action(self, action: Action) -> str:
         """Serialize core action fields to a deterministic string."""
         data = action.model_dump()

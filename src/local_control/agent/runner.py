@@ -148,6 +148,9 @@ class AgentRunner:
         )
         permissions = RunPermissions()
         self.validator.reset_run()
+        self.budget.reset()
+        self.recovery_policy.reset()
+        self.stuck_detector.reset()
 
         logger.info("agent_runner.run_started", run_id=rid, goal=goal, mode=autonomy_mode)
         self._write_audit(
