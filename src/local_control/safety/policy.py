@@ -228,7 +228,8 @@ def classify(
     # B-07, B-08, B-09, B-10, B-16: Shell command rules
     if act_type == "shell_run":
         cmd_str = getattr(action, "command", "") or ""
-        tier, cat, reasons, grantable = classify_command(cmd_str)
+        cmd_cwd = getattr(action, "cwd", None)
+        tier, cat, reasons, grantable = classify_command(cmd_str, cwd=cmd_cwd)
         if tier == "BLOCKED":
             return tier, cat, reasons, grantable, f"Blocked dangerous shell command: {cmd_str}"
 
@@ -353,7 +354,8 @@ def classify(
     # C-05, C-06, C-09, C-18: Shell command confirm rules
     if act_type == "shell_run":
         cmd_str = getattr(action, "command", "") or ""
-        tier, cat, reasons, grantable = classify_command(cmd_str)
+        cmd_cwd = getattr(action, "cwd", None)
+        tier, cat, reasons, grantable = classify_command(cmd_str, cwd=cmd_cwd)
         if tier == "CONFIRM":
             return tier, cat, reasons, grantable, f"Execute command: {cmd_str}"
 
@@ -501,7 +503,8 @@ def classify(
     # S-06: Read-only shell allowlist
     if act_type == "shell_run":
         cmd_str = getattr(action, "command", "") or ""
-        tier, cat, reasons, grantable = classify_command(cmd_str)
+        cmd_cwd = getattr(action, "cwd", None)
+        tier, cat, reasons, grantable = classify_command(cmd_str, cwd=cmd_cwd)
         if tier == "SAFE":
             return tier, cat, reasons, grantable, f"Read-only command: {cmd_str}"
 

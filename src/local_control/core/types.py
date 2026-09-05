@@ -130,6 +130,7 @@ class ActionResult(BaseModel):
     success: bool
     started_at: datetime
     duration_ms: int = Field(..., ge=0)
+    output: str | None = None
     data: dict[str, Any] = Field(default_factory=dict)
     error: ErrorInfo | None = None
 

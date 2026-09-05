@@ -104,7 +104,7 @@ class AgentRunner:
             "step_index": step_index,
             "payload": payload,
         }
-        line = json.dumps(record) + "\n"
+        line = json.dumps(record, default=str) + "\n"
 
         # 1. Per-run audit log
         audit_file = run_dir / "audit.jsonl"
@@ -573,7 +573,10 @@ class AgentRunner:
                     self._write_audit(
                         run_dir,
                         "executed_confirm",
-                        {"action": action.model_dump(), "result": result.model_dump()},
+                        {
+                            "action": action.model_dump(mode="json"),
+                            "result": result.model_dump(mode="json"),
+                        },
                         step_index=state.current_step,
                     )
 
@@ -687,4 +690,21 @@ class AgentRunner:
             res_str = "SUCCESS" if step.result.success else "FAILURE"
             act_type = step.planner_response.action.type
             lines.append(f"- **Step {step.step_index}**: `{act_type}` -> {res_str}")
+
+        if state.steps:
+            last_action = state.steps[-1].planner_response.action
+            if isinstance(last_action, DoneAction):
+                lines.extend(
+                    [
+                        "",
+                        "## Completion Summary",
+                        last_action.summary,
+                        "",
+                        "### Verification Notes",
+                        last_action.verification_notes,
+                    ]
+                )
+            elif isinstance(last_action, FailAction):
+                lines.extend(["", "## Failure Reason", last_action.reason])
+
         return "\n".join(lines)

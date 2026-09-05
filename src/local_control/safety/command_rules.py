@@ -1,6 +1,7 @@
 """Command classification and shell security rules according to SECURITY_MODEL section 4.2."""
 
 import re
+from pathlib import Path
 
 from local_control.core.types import PolicyTier
 
@@ -273,13 +274,86 @@ def classify_single_statement(statement: str) -> CommandClassification:
     return "CONFIRM", "C-05", [f"Shell command '{cmd_name}' requires confirmation"], True
 
 
-def classify_command(command: str) -> CommandClassification:
+def inspect_script(path: str | Path) -> CommandClassification:
+    """Inspect a script file's contents for B-rule violations before execution."""
+    p = Path(path)
+    if not p.is_file():
+        return "SAFE", "", [], True
+
+    try:
+        content = p.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return "SAFE", "", [], True
+
+    for line in content.splitlines():
+        norm_line = line.strip()
+        if not norm_line or norm_line.startswith(("#", "::", "REM", "//")):
+            continue
+
+        for pat in B07_PATTERNS:
+            if re.search(pat, norm_line, re.IGNORECASE):
+                return (
+                    "BLOCKED",
+                    "B-07",
+                    [f"Script '{p.name}' contains permanent deletion: {pat}"],
+                    False,
+                )
+        for pat in B08_PATTERNS:
+            if re.search(pat, norm_line, re.IGNORECASE):
+                return (
+                    "BLOCKED",
+                    "B-08",
+                    [f"Script '{p.name}' contains system-altering command: {pat}"],
+                    False,
+                )
+        for pat in B09_PATTERNS:
+            if re.search(pat, norm_line, re.IGNORECASE):
+                return (
+                    "BLOCKED",
+                    "B-09",
+                    [f"Script '{p.name}' contains remote code execution: {pat}"],
+                    False,
+                )
+        for pat in B10_PATTERNS:
+            if re.search(pat, norm_line, re.IGNORECASE):
+                return (
+                    "BLOCKED",
+                    "B-10",
+                    [f"Script '{p.name}' contains download execution: {pat}"],
+                    False,
+                )
+        for pat in B16_PATTERNS:
+            if re.search(pat, norm_line, re.IGNORECASE):
+                return (
+                    "BLOCKED",
+                    "B-16",
+                    [f"Script '{p.name}' contains software installation: {pat}"],
+                    False,
+                )
+
+    return "SAFE", "", [], True
+
+
+def classify_command(command: str, cwd: str | Path | None = None) -> CommandClassification:
     """Classify a full command (which may contain multiple statements).
 
     Classifies by its most dangerous statement (BLOCKED > CONFIRM > SAFE).
+    Also inspects any referenced script files (.ps1, .bat, .cmd, .py) for B-rules.
     """
     statements = split_statements(command)
     results = [classify_single_statement(s) for s in statements]
+
+    # Inspect any script files mentioned in the command
+    base_dir = Path(cwd) if cwd else Path.cwd()
+    script_pattern = re.compile(r"[\'\"]?([^\s\'\"]+\.(?:ps1|bat|cmd|py))[\'\"]?", re.IGNORECASE)
+    for match in script_pattern.finditer(command):
+        cand_path = Path(match.group(1))
+        if not cand_path.is_absolute():
+            cand_path = base_dir / cand_path
+        if cand_path.is_file():
+            script_res = inspect_script(cand_path)
+            if script_res[0] == "BLOCKED":
+                return script_res
 
     # Most dangerous wins
     for tier in ("BLOCKED", "CONFIRM", "SAFE"):

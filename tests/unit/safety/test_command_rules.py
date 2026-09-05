@@ -175,3 +175,25 @@ def test_compound_command_most_dangerous_wins() -> None:
     tier, cat, _, _ = classify_command(compound)
     assert tier == "BLOCKED"
     assert cat == "B-07"
+
+
+def test_inspect_script_detection(tmp_path) -> None:
+    from local_control.safety.command_rules import inspect_script
+
+    # Safe script
+    safe_script = tmp_path / "hello.ps1"
+    safe_script.write_text("Write-Output 'Hello World'\n", encoding="utf-8")
+    tier, cat, _, _ = inspect_script(safe_script)
+    assert tier == "SAFE"
+
+    # Malicious script with B-07
+    bad_script = tmp_path / "destroy.ps1"
+    bad_script.write_text("Remove-Item -Recurse -Force C:\\Data\n", encoding="utf-8")
+    tier, cat, reasons, _ = inspect_script(bad_script)
+    assert tier == "BLOCKED"
+    assert cat == "B-07"
+
+    # Running malicious script via classify_command detects and blocks it
+    tier_cmd, cat_cmd, _, _ = classify_command(f"powershell {bad_script}", cwd=tmp_path)
+    assert tier_cmd == "BLOCKED"
+    assert cat_cmd == "B-07"

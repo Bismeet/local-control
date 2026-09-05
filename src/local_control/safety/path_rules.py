@@ -115,17 +115,34 @@ def classify_path(path: Path | str, settings: Settings | None = None) -> tuple[P
     localappdata = os.environ.get("LOCALAPPDATA", "")
     home = str(Path.home()).lower()
 
-    # Exempt agent's own data directory and browser download dir
+    # Exempt agent's own data directory, temp directory, and explicitly configured allowed roots
     agent_dir = str(Path.home() / ".local_control").lower()
     agent_appdata = (
         str(Path(localappdata) / "local-control").lower() if localappdata else "___dummy___"
     )
+    temp_dir = (os.environ.get("TEMP", "") or os.environ.get("TMP", "")).lower()
+    is_in_temp = bool(temp_dir and res_str.startswith(temp_dir))
+
+    in_allowed_roots = False
+    if settings:
+        for extra in getattr(settings.safety, "allowed_roots", []):
+            try:
+                if resolved.is_relative_to(Path(extra).expanduser().resolve(strict=False)):
+                    in_allowed_roots = True
+                    break
+            except Exception:
+                pass
 
     is_in_appdata = (appdata and res_str.startswith(appdata.lower())) or (
         localappdata and res_str.startswith(localappdata.lower())
     )
 
-    if is_in_appdata and not (res_str.startswith(agent_dir) or res_str.startswith(agent_appdata)):
+    if is_in_appdata and not (
+        res_str.startswith(agent_dir)
+        or res_str.startswith(agent_appdata)
+        or is_in_temp
+        or in_allowed_roots
+    ):
         return "protected", f"Path '{resolved}' is in protected AppData location (B-05)"
 
     # 7. Check if targeting another user's profile (B-15)
