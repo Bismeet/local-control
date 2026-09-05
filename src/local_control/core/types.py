@@ -208,6 +208,14 @@ class Verdict(BaseModel):
     grantable_for_run: bool = False
 
 
+class RunPermissions(BaseModel):
+    """Ephemeral per-run permissions and category grants."""
+
+    granted_categories: set[str] = Field(default_factory=set)
+    granted_roots: set[str] = Field(default_factory=set)
+    granted_hosts: set[str] = Field(default_factory=set)
+
+
 ApprovalDecisionKind = Literal["approved", "denied", "approved_for_run"]
 
 

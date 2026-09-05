@@ -11,7 +11,7 @@ from local_control.agent.runner import AgentRunner
 from local_control.config.settings import Settings
 from local_control.core.run_store import RunStore
 from local_control.models.fake import FakeModelProvider
-from local_control.safety.approval import AutoApprovalGate
+from local_control.safety.approval import ApprovalDecision, AutoApprovalGate
 from tests.integration.fakes.fake_computer import FakeComputer
 
 
@@ -183,10 +183,12 @@ async def test_runner_feedback_queue_captured_in_next_prompt() -> None:
         def __init__(self) -> None:
             self.count = 0
 
-        async def arequest(self, action: object, prompt: str = "") -> bool:
+        async def arequest(self, action: object, **kwargs: object) -> ApprovalDecision:
             self.count += 1
             # Deny first action, approve subsequent
-            return self.count > 1
+            if self.count > 1:
+                return ApprovalDecision(decision="approved")
+            return ApprovalDecision(decision="denied")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         run_store = RunStore(base_dir=Path(tmpdir))
@@ -201,7 +203,7 @@ async def test_runner_feedback_queue_captured_in_next_prompt() -> None:
             run_store=run_store,
         )
 
-        result = await runner.run(goal="Test feedback queue")
+        result = await runner.run(goal="Test feedback queue", autonomy_mode="step")
         assert result.status == "COMPLETED"
 
         # Check that request #2 contains the denial feedback notice

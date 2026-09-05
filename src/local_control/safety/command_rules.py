@@ -1,0 +1,290 @@
+"""Command classification and shell security rules according to SECURITY_MODEL section 4.2."""
+
+import re
+
+from local_control.core.types import PolicyTier
+
+CommandClassification = tuple[PolicyTier, str, list[str], bool]
+# (tier, category, reasons, grantable_for_run)
+
+# B-07 Permanent Deletion
+B07_PATTERNS = [
+    r"\bRemove-Item\b.*-Recurse\b",
+    r"\brm\s+-[a-zA-Z]*r",
+    r"\brmdir\s+/s\b",
+    r"\bdel\s+/s\b",
+    r"\bClear-RecycleBin\b",
+    r"\bformat\b",
+    r"\bdiskpart\b",
+    r"\bcipher\s+/w",
+    r"\bsdelete\b",
+]
+
+# B-08 System Altering / Privilege Escalation
+B08_PATTERNS = [
+    r"\bSet-ExecutionPolicy\b",
+    r"\breg\s+(add|delete)\b.*HKLM",
+    r"\bbcdedit\b",
+    r"\bshutdown\b",
+    r"\bRestart-Computer\b",
+    r"\bStop-Computer\b",
+    r"\bnetsh\b",
+    r"\bSet-MpPreference\b",
+    r"\bAdd-MpPreference\b.*-Exclusion",
+    r"\btakeown\b",
+    r"\bicacls\b.*/grant",
+    r"\brunas\b",
+    r"\bStart-Process\b.*-Verb\s+RunAs",
+    r"\bschtasks\s+/create\b",
+    r"\bNew-ScheduledTask\b",
+    r"\bwmic\b",
+    r"\bDisable-[a-zA-Z0-9_-]+",
+    r"\bStop-Service\b",
+    r"\bsc\s+(config|delete)\b",
+    r"\bnet\s+user\b",
+    r"\bnet\s+localgroup\b",
+]
+
+# B-09 Remote Code Execution
+B09_PATTERNS = [
+    r"\bInvoke-Expression\b",
+    r"\biex\b",
+    r"\bInvoke-WebRequest\b.*\|\s*(iex|Invoke-Expression)",
+    r"\bcurl\b.*\|\s*(sh|bash|powershell|pwsh|iex)",
+    r"-EncodedCommand\b",
+    r"\bFromBase64String\b",
+    r"\bDownloadString\b",
+    r"\bcertutil\b.*-urlcache",
+    r"\bmshta\b",
+    r"\bregsvr32\b",
+    r"\brundll32\b",
+]
+
+# B-10 Executing Downloads
+B10_PATTERNS = [
+    r"[a-zA-Z0-9_\-\\/\.]*(downloads|local-control)[a-zA-Z0-9_\-\\/\.]*\.(exe|msi|bat|cmd|ps1|vbs|js|jar|scr|com|hta|lnk)\b"
+]
+
+# B-16 Software Installation
+B16_PATTERNS = [
+    r"\bmsiexec\b",
+    r"\.exe\s+/S\b",
+    r"\bsetup\.exe\b",
+    r"\bwinget\s+install\s+--silent\b",
+]
+
+# C-06 Dangerous Git Operations
+C06_PATTERNS = [
+    r"\bgit\s+push\b",
+    r"\bgit\s+reset\s+--hard\b",
+    r"\bgit\s+clean\b",
+    r"\bgit\s+rebase\b",
+    r"\bgit\s+branch\s+-D\b",
+]
+
+# C-09 Software Installation
+C09_PATTERNS = [
+    r"\bwinget\s+install\b",
+    r"\bpip\s+install\b",
+    r"\bnpm\s+install\s+-g\b",
+    r"\bchoco\s+install\b",
+    r"\bscoop\s+install\b",
+    r"\bdotnet\s+tool\s+install\s+-g\b",
+]
+
+# C-18 Sending Mail / Webhooks
+C18_PATTERNS = [
+    r"\bSend-MailMessage\b",
+    r"\bcurl\b.*(hooks\.slack\.com|discord\.com/api/webhooks|api\.telegram\.org)",
+]
+
+# S-06 Read-only Allowed Commands (first token or tokens)
+S06_ALLOWED_COMMANDS = {
+    "get-childitem",
+    "dir",
+    "ls",
+    "get-content",
+    "cat",
+    "type",
+    "get-location",
+    "pwd",
+    "get-item",
+    "test-path",
+    "select-string",
+    "findstr",
+    "where.exe",
+    "where",
+    "get-command",
+    "get-process",
+    "python --version",
+    "python -v",
+    "node --version",
+    "node -v",
+    "pip list",
+    "npm ls",
+    "dotnet --info",
+    "measure-object",
+    "get-date",
+    "hostname",
+    "whoami",
+}
+
+# S-06 Forbidden characters/tokens
+S06_FORBIDDEN_OPERATORS = [
+    "|",
+    ";",
+    "&&",
+    ">",
+    ">>",
+    "2>",
+    "out-file",
+    "-outfile",
+    "set-content",
+    "-setcontent",
+    "invoke-",
+    "`",
+    "$(",
+    "$env:",
+    "%",
+]
+
+
+def split_statements(command: str) -> list[str]:
+    """Split a compound PowerShell command into individual statements while respecting quotes."""
+    statements: list[str] = []
+    current: list[str] = []
+    in_quote: str | None = None
+
+    for char in command:
+        if char in ('"', "'"):
+            if in_quote == char:
+                in_quote = None
+            elif in_quote is None:
+                in_quote = char
+            current.append(char)
+        elif in_quote is None and char in (";", "\n"):
+            stmt = "".join(current).strip()
+            if stmt:
+                statements.append(stmt)
+            current = []
+        else:
+            current.append(char)
+
+    last_stmt = "".join(current).strip()
+    if last_stmt:
+        statements.append(last_stmt)
+
+    return statements or [command.strip()]
+
+
+def classify_single_statement(statement: str) -> CommandClassification:
+    """Classify a single PowerShell statement against B, C, and S rules."""
+    norm = statement.strip()
+
+    # 1. Check B-07 Permanent Deletion
+    for pat in B07_PATTERNS:
+        if re.search(pat, norm, re.IGNORECASE):
+            return "BLOCKED", "B-07", [f"Permanent deletion command pattern matched: {pat}"], False
+
+    # 2. Check B-08 System Altering
+    for pat in B08_PATTERNS:
+        if re.search(pat, norm, re.IGNORECASE):
+            return "BLOCKED", "B-08", [f"System-altering command pattern matched: {pat}"], False
+
+    # 3. Check B-09 Remote Code Execution
+    for pat in B09_PATTERNS:
+        if re.search(pat, norm, re.IGNORECASE):
+            return "BLOCKED", "B-09", [f"Remote code execution pattern matched: {pat}"], False
+
+    # 4. Check B-10 Executing Downloads
+    for pat in B10_PATTERNS:
+        if re.search(pat, norm, re.IGNORECASE):
+            return (
+                "BLOCKED",
+                "B-10",
+                ["Execution of files in download directory is blocked"],
+                False,
+            )
+
+    # 5. Check B-16 Software Installation
+    for pat in B16_PATTERNS:
+        if re.search(pat, norm, re.IGNORECASE):
+            return (
+                "BLOCKED",
+                "B-16",
+                ["Unattended software installation is blocked"],
+                False,
+            )
+
+    # 6. Check C-06 Dangerous Git Operations
+    for pat in C06_PATTERNS:
+        if re.search(pat, norm, re.IGNORECASE):
+            return "CONFIRM", "C-06", [f"Dangerous git operation: {pat}"], False
+
+    # 7. Check C-09 Software Installation (non-silent)
+    for pat in C09_PATTERNS:
+        if re.search(pat, norm, re.IGNORECASE):
+            return "CONFIRM", "C-09", ["Software package installation requires confirmation"], False
+
+    # 8. Check C-18 Sending Mail / Webhooks
+    for pat in C18_PATTERNS:
+        if re.search(pat, norm, re.IGNORECASE):
+            return "CONFIRM", "C-18", ["External messaging via shell requires confirmation"], False
+
+    # 9. Check S-06 Read-only Allowlist
+    is_safe = False
+    norm_lower = norm.lower()
+
+    # S-06 must NOT contain forbidden operators
+    has_forbidden = any(op in norm_lower for op in S06_FORBIDDEN_OPERATORS)
+
+    if not has_forbidden:
+        tokens = norm_lower.split()
+        if tokens:
+            cmd0 = tokens[0]
+            if cmd0 in S06_ALLOWED_COMMANDS:
+                if cmd0 == "get-process" and ("-id" in tokens or "-name" in tokens):
+                    is_safe = False
+                else:
+                    is_safe = True
+            elif len(tokens) >= 2:
+                cmd_two = f"{tokens[0]} {tokens[1]}"
+                if (
+                    cmd_two in S06_ALLOWED_COMMANDS
+                    or tokens[0] == "git"
+                    and tokens[1] in {"status", "log", "diff", "remote"}
+                ):
+                    is_safe = True
+                elif (
+                    tokens[0] == "git"
+                    and tokens[1] == "branch"
+                    and "-d" not in tokens
+                    and "-D" not in tokens
+                ):
+                    # git branch is safe unless -d or -D
+                    is_safe = True
+
+    if is_safe:
+        return "SAFE", "S-06", ["Command matches read-only allowlist"], True
+
+    # 10. Default: C-05
+    tokens = norm.split()
+    cmd_name = tokens[0] if tokens else "shell"
+    return "CONFIRM", "C-05", [f"Shell command '{cmd_name}' requires confirmation"], True
+
+
+def classify_command(command: str) -> CommandClassification:
+    """Classify a full command (which may contain multiple statements).
+
+    Classifies by its most dangerous statement (BLOCKED > CONFIRM > SAFE).
+    """
+    statements = split_statements(command)
+    results = [classify_single_statement(s) for s in statements]
+
+    # Most dangerous wins
+    for tier in ("BLOCKED", "CONFIRM", "SAFE"):
+        for res in results:
+            if res[0] == tier:
+                return res
+
+    return "CONFIRM", "C-05", ["Default command classification"], False

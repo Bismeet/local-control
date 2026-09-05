@@ -184,7 +184,9 @@ def act(
 @app.command()
 def run(
     goal: str = typer.Argument(..., help="High-level goal for the agent to achieve"),
-    mode: str = typer.Option("step", help="Autonomy mode (step mode requires per-action approval)"),
+    mode: str = typer.Option(
+        "assisted", help="Autonomy mode: step, assisted (default), or trusted"
+    ),
 ) -> None:
     """Run the agent loop autonomously towards a goal in step mode."""
     if is_running_elevated():
@@ -382,6 +384,70 @@ def doctor() -> None:
 
     _add_rows("", masked)
     console.print(table)
+
+
+policy_app = typer.Typer(help="Policy inspection and explanation commands")
+app.add_typer(policy_app, name="policy")
+
+
+@policy_app.command("explain")
+def policy_explain(
+    action_file: str = typer.Argument(
+        ...,
+        help="Path to JSON file containing an Action proposal, or raw JSON string",
+    ),
+) -> None:
+    """Explain policy classification, safety tier, and reasons for an action."""
+    from datetime import UTC, datetime
+    from pathlib import Path
+
+    from pydantic import TypeAdapter
+
+    from local_control.core.actions import Action
+    from local_control.core.types import ImageRef, Observation, Point, ScreenGeometry
+    from local_control.safety.validator import SafetyValidator
+
+    try:
+        p = Path(action_file)
+        raw_data = p.read_text(encoding="utf-8") if p.exists() and p.is_file() else action_file
+
+        action: Action = TypeAdapter(Action).validate_json(raw_data)
+    except Exception as e:
+        console.print(f"[bold red]Failed to parse action JSON:[/bold red] {e}")
+        raise typer.Exit(code=1) from e
+
+    validator = SafetyValidator()
+    dummy_obs = Observation(
+        step_index=0,
+        captured_at=datetime.now(UTC),
+        screen=ScreenGeometry(width_px=1920, height_px=1080, scale_factor=1.0),
+        image=ImageRef(
+            path_original="",
+            path_model="",
+            model_width=960,
+            model_height=540,
+            phash="0" * 16,
+        ),
+        cursor=Point(x=0, y=0),
+    )
+
+    verdict = validator.validate(action, dummy_obs)
+
+    color = (
+        "green" if verdict.tier == "SAFE" else ("yellow" if verdict.tier == "CONFIRM" else "red")
+    )
+    console.print(
+        Panel(
+            f"[bold]Tier:[/bold] [{color}]{verdict.tier}[/{color}]\n"
+            f"[bold]Category:[/bold] {verdict.category}\n"
+            f"[bold]Decision (assisted):[/bold] {verdict.decision}\n"
+            f"[bold]Grantable for run:[/bold] {verdict.grantable_for_run}\n"
+            f"[bold]Reasons:[/bold] {'; '.join(verdict.reasons) or 'None'}\n"
+            f"[bold]Summary:[/bold] {verdict.human_summary}",
+            title=f"Policy Explanation: {action.type}",
+            border_style=color,
+        )
+    )
 
 
 if __name__ == "__main__":
