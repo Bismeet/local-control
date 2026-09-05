@@ -21,6 +21,9 @@ class ModelRoleSettings(BaseModel):
     model: str = "gpt-4o"
     base_url: str | None = "https://api.openai.com/v1"
     api_key_env: str = "OPENAI_API_KEY"
+    api_key: str = ""
+    supports_vision: bool = True
+    supports_json_schema: bool = True
     extra: dict[str, Any] = Field(default_factory=dict)
 
 

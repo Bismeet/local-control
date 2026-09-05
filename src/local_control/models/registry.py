@@ -26,12 +26,14 @@ def build(role: str, settings: Settings) -> ModelProvider:
         return FakeModelProvider(name="fake", model=cfg.model)
 
     if provider_type == "openai_compat":
-        api_key = os.environ.get(cfg.api_key_env, "")
+        api_key = cfg.api_key or os.environ.get(cfg.api_key_env, "")
         base_url = cfg.base_url or "https://api.openai.com/v1"
         return OpenAiCompatProvider(
             model=cfg.model,
             base_url=base_url,
             api_key=api_key,
+            supports_vision=cfg.supports_vision,
+            supports_json_schema=cfg.supports_json_schema,
         )
 
     raise ConfigurationError(f"Unsupported model provider: '{cfg.provider}' for role '{role}'")
