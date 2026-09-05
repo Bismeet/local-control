@@ -41,6 +41,7 @@ class RunCreateRequest(BaseModel):
     goal: str
     autonomy_mode: str = "assisted"
     run_id: str | None = None
+    force: bool = False
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -129,10 +130,29 @@ def create_app(
 
     @app.get("/api/status")
     async def get_status(_: str = Depends(verify_token)) -> dict[str, Any]:
-        """Return server status and active run ID."""
+        """Return server status, active run ID, and pending interactions."""
+        pending_approval = None
+        pending_question = None
+        if hasattr(app.state.gate, "get_pending_approval"):
+            pending_approval = app.state.gate.get_pending_approval()
+        if hasattr(app.state.gate, "get_pending_answer"):
+            pending_question = app.state.gate.get_pending_answer()
+
+        status_str = "IDLE"
+        if app.state.active_run_id:
+            if pending_approval:
+                status_str = "WAITING_APPROVAL"
+            elif pending_question:
+                status_str = "WAITING_USER"
+            else:
+                status_str = "RUNNING"
+
         return {
             "status": "ok",
+            "run_status": status_str,
             "active_run": app.state.active_run_id,
+            "pending_approval": pending_approval,
+            "pending_question": pending_question,
             "token": app.state.token,
         }
 
@@ -146,7 +166,18 @@ def create_app(
             raise HTTPException(status_code=500, detail="No AgentRunner configured on server")
 
         if app.state.active_run_task and not app.state.active_run_task.done():
-            raise HTTPException(status_code=400, detail="A run is already currently active")
+            if req.force:
+                logger.info("control_center.aborting_previous_run_for_force_start")
+                if hasattr(app.state.gate, "abort_all"):
+                    app.state.gate.abort_all("Superseded by new run")
+                app.state.stop_token.set("Superseded by new run")
+                app.state.active_run_task.cancel()
+                try:
+                    await asyncio.wait_for(asyncio.shield(app.state.active_run_task), timeout=1.0)
+                except Exception:
+                    pass
+            else:
+                raise HTTPException(status_code=400, detail="A run is already currently active")
 
         rid = req.run_id or f"run-{int(time.time())}"
         app.state.active_run_id = rid
@@ -274,9 +305,22 @@ def create_app(
 
     @app.post("/api/stop")
     async def stop_execution(_: str = Depends(verify_token)) -> dict[str, Any]:
-        """Instant kill switch: set StopToken and stop preview."""
+        """Instant kill switch: set StopToken, abort pending gates, and stop preview."""
         app.state.stop_token.set("Stop requested from Control Center")
+        if hasattr(app.state.gate, "abort_all"):
+            app.state.gate.abort_all("Stop requested from Control Center")
+        if app.state.active_run_task and not app.state.active_run_task.done():
+            app.state.active_run_task.cancel()
         app.state.preview_publisher.stop()
+        app.state.active_run_id = None
+        if app.state.event_bus:
+            await app.state.event_bus.publish(
+                Event(
+                    run_id="current",
+                    type="run_finished",
+                    payload={"status": "STOPPED", "reason": "Emergency stop requested"},
+                )
+            )
         return {"status": "stopped"}
 
     @app.get("/api/preview.jpg")

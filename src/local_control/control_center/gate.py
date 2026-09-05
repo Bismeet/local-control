@@ -21,7 +21,9 @@ class ControlCenterApprovalGate:
     def __init__(self, event_bus: EventBus | None = None) -> None:
         self.event_bus = event_bus
         self._pending_approvals: dict[str, asyncio.Future[ApprovalDecision]] = {}
+        self._pending_approval_payloads: dict[str, dict[str, Any]] = {}
         self._pending_answers: dict[str, asyncio.Future[str]] = {}
+        self._pending_answer_payloads: dict[str, dict[str, Any]] = {}
         self._active_approval_req_id: str | None = None
         self._active_answer_req_id: str | None = None
 
@@ -53,9 +55,6 @@ class ControlCenterApprovalGate:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[ApprovalDecision] = loop.create_future()
 
-        self._pending_approvals[req_id] = fut
-        self._active_approval_req_id = req_id
-
         payload: dict[str, Any] = {
             "request_id": req_id,
             "action": action.model_dump(mode="json"),
@@ -65,6 +64,10 @@ class ControlCenterApprovalGate:
             "grantable_for_run": verdict.grantable_for_run if verdict else False,
             "screenshot_path": screenshot_path,
         }
+
+        self._pending_approvals[req_id] = fut
+        self._pending_approval_payloads[req_id] = payload
+        self._active_approval_req_id = req_id
 
         logger.info(
             "control_center_gate.approval_requested",
@@ -92,6 +95,7 @@ class ControlCenterApprovalGate:
             return decision
         finally:
             self._pending_approvals.pop(req_id, None)
+            self._pending_approval_payloads.pop(req_id, None)
             if self._active_approval_req_id == req_id:
                 self._active_approval_req_id = None
 
@@ -128,13 +132,14 @@ class ControlCenterApprovalGate:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[str] = loop.create_future()
 
-        self._pending_answers[req_id] = fut
-        self._active_answer_req_id = req_id
-
         payload: dict[str, Any] = {
             "request_id": req_id,
             "question": question,
         }
+
+        self._pending_answers[req_id] = fut
+        self._pending_answer_payloads[req_id] = payload
+        self._active_answer_req_id = req_id
 
         logger.info(
             "control_center_gate.user_input_requested", request_id=req_id, question=question
@@ -155,6 +160,7 @@ class ControlCenterApprovalGate:
             return answer
         finally:
             self._pending_answers.pop(req_id, None)
+            self._pending_answer_payloads.pop(req_id, None)
             if self._active_answer_req_id == req_id:
                 self._active_answer_req_id = None
 
@@ -177,3 +183,40 @@ class ControlCenterApprovalGate:
             fut.set_result(answer)
             return True
         return False
+
+    def get_pending_approval(self) -> dict[str, Any] | None:
+        """Return the active pending approval payload, if any."""
+        if (
+            self._active_approval_req_id
+            and self._active_approval_req_id in self._pending_approval_payloads
+        ):
+            return self._pending_approval_payloads[self._active_approval_req_id]
+        if self._pending_approval_payloads:
+            return next(iter(self._pending_approval_payloads.values()))
+        return None
+
+    def get_pending_answer(self) -> dict[str, Any] | None:
+        """Return the active pending user question payload, if any."""
+        if (
+            self._active_answer_req_id
+            and self._active_answer_req_id in self._pending_answer_payloads
+        ):
+            return self._pending_answer_payloads[self._active_answer_req_id]
+        if self._pending_answer_payloads:
+            return next(iter(self._pending_answer_payloads.values()))
+        return None
+
+    def abort_all(self, reason: str = "Execution stopped") -> None:
+        """Immediately abort and reject all pending approval and question requests."""
+        for fut in list(self._pending_approvals.values()):
+            if not fut.done():
+                fut.set_result(ApprovalDecision(decision="denied", note=reason))
+        for fut in list(self._pending_answers.values()):
+            if not fut.done():
+                fut.set_result(reason)
+        self._pending_approvals.clear()
+        self._pending_approval_payloads.clear()
+        self._pending_answers.clear()
+        self._pending_answer_payloads.clear()
+        self._active_approval_req_id = None
+        self._active_answer_req_id = None

@@ -106,6 +106,25 @@
         });
     }
 
+    function displayApproval(payload) {
+        if (!payload) return;
+        activeApprovalReqId = payload.request_id;
+        approvalCategory.innerText = payload.category || 'CONFIRM';
+        approvalSummary.innerText = payload.human_summary || 'Confirmation required';
+        approvalActionType.innerText = payload.action?.type || '';
+        approvalReasons.innerText = (payload.verdict?.reasons || []).join(', ');
+        cardApproval.classList.remove('hidden');
+        updateStatus('WAITING_APPROVAL');
+    }
+
+    function displayQuestion(payload) {
+        if (!payload) return;
+        activeAnswerReqId = payload.request_id;
+        questionText.innerText = payload.question || 'Input requested';
+        cardQuestion.classList.remove('hidden');
+        updateStatus('WAITING_USER');
+    }
+
     // WebSocket Connection
     function connectWebSocket() {
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -114,6 +133,7 @@
 
         socket.onopen = () => {
             logMessage('WebSocket connected to runner feed.', 'success');
+            syncServerStatus();
         };
 
         socket.onmessage = (event) => {
@@ -160,19 +180,10 @@
         } else if (type === 'verdict') {
             logMessage(`Verdict: ${payload.tier} [${payload.category}] -> ${payload.decision}`, 'verdict');
         } else if (type === 'approval_requested') {
-            activeApprovalReqId = payload.request_id;
-            approvalCategory.innerText = payload.category || 'CONFIRM';
-            approvalSummary.innerText = payload.human_summary || 'Confirmation required';
-            approvalActionType.innerText = payload.action?.type || '';
-            approvalReasons.innerText = (payload.verdict?.reasons || []).join(', ');
-            cardApproval.classList.remove('hidden');
-            updateStatus('WAITING_APPROVAL');
+            displayApproval(payload);
             logMessage(`APPROVAL REQUIRED: ${payload.human_summary}`, 'verdict');
         } else if (type === 'user_input_requested') {
-            activeAnswerReqId = payload.request_id;
-            questionText.innerText = payload.question || 'Input requested';
-            cardQuestion.classList.remove('hidden');
-            updateStatus('WAITING_USER');
+            displayQuestion(payload);
             logMessage(`USER INPUT REQUIRED: ${payload.question}`, 'verdict');
         } else if (type === 'action_started') {
             logMessage(`Executing: ${payload.action_type || ''}...`, 'action');
@@ -211,6 +222,24 @@
                 activeRunIdEl.innerText = currentRunId;
                 updateStatus('RUNNING');
                 logMessage(`Run created: ${currentRunId}`, 'info');
+            } else if (data.detail && data.detail.includes('already currently active')) {
+                const force = confirm('A run is currently active on the server. Do you want to stop it and start this new run?');
+                if (force) {
+                    const forceResp = await apiFetch('/api/runs', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ goal, autonomy_mode: mode, force: true })
+                    });
+                    const forceData = await forceResp.json();
+                    if (forceResp.ok) {
+                        currentRunId = forceData.run_id;
+                        activeRunIdEl.innerText = currentRunId;
+                        updateStatus('RUNNING');
+                        logMessage(`Run created: ${currentRunId}`, 'info');
+                    } else {
+                        alert(`Failed to start run: ${forceData.detail || forceData.error}`);
+                    }
+                }
             } else {
                 alert(`Failed to start run: ${data.detail || data.error}`);
             }
@@ -224,6 +253,11 @@
     btnStop.addEventListener('click', async () => {
         try {
             await apiFetch('/api/stop', { method: 'POST' });
+            cardApproval.classList.add('hidden');
+            cardQuestion.classList.add('hidden');
+            updateStatus('STOPPED');
+            activeRunIdEl.innerText = 'Stopped';
+            btnStart.disabled = false;
             logMessage('Stop signal sent to runner.', 'error');
         } catch (err) {
             console.error('Stop request failed', err);
@@ -315,7 +349,31 @@
         }
     };
 
+    async function syncServerStatus() {
+        try {
+            const resp = await apiFetch('/api/status');
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (data.active_run) {
+                currentRunId = data.active_run;
+                activeRunIdEl.innerText = currentRunId;
+                updateStatus(data.run_status || 'RUNNING');
+                if (data.pending_approval) {
+                    displayApproval(data.pending_approval);
+                } else if (data.pending_question) {
+                    displayQuestion(data.pending_question);
+                }
+            } else {
+                updateStatus('IDLE');
+                activeRunIdEl.innerText = 'No active run';
+            }
+        } catch (err) {
+            console.error('Status sync failed', err);
+        }
+    }
+
     // Init
     connectWebSocket();
     loadRunsHistory();
+    syncServerStatus();
 })();
